@@ -1,0 +1,23 @@
+[Unit]
+Description=Nintendo Switch Pro Controller HID gadget (Pi Zero W)
+After=local-fs.target
+
+# Unbinds g_cdc, so Mac USB serial/ethernet will not appear while this runs.
+# Wi-Fi SSH stays available. Untested as a product; HID gadget is still experimental.
+# stdin is EOF under systemd; commands arrive on /run/procon.sock (mode 0666).
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/s3-coaching/switch-controller
+# /run is tmpfs; leftover sock from a crash would block bind.
+ExecStartPre=/home/s3-coaching/switch-controller/add_procon_gadget.sh
+ExecStartPre=-/bin/rm -f /run/procon.sock
+ExecStart=/usr/bin/python3 /home/s3-coaching/switch-controller/procon.py --quiet --socket /run/procon.sock
+ExecStopPost=/home/s3-coaching/switch-controller/add_procon_gadget.sh remove
+ExecStopPost=-/bin/rm -f /run/procon.sock
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+# Upstream clone managed by install_joycontrol.sh
+joycontrol/
+.venv-joycontrol/
+
+__pycache__/
+*.pyc
+*.log
+.DS_Store
