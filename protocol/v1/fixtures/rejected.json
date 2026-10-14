@@ -1,0 +1,50 @@
+{
+  "description": "malformed commands are rejected and never executed",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx7"},
+      "expect": [{"type": "hello", "status": "ok"}]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx7-1", "op": "tap", "args": {"button": "a", "hold_ms": 5}},
+      "expect": [
+        {"type": "ack", "id": "fx7-1"},
+        {"type": "result", "id": "fx7-1", "status": "rejected", "error": {"code": "bad_args"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx7-2", "op": "open_review", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx7-2"},
+        {"type": "result", "id": "fx7-2", "status": "rejected", "error": {"code": "unknown_op"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx7-3", "op": "press", "args": {"buttons": ["charging"]}},
+      "expect": [
+        {"type": "ack", "id": "fx7-3"},
+        {"type": "result", "id": "fx7-3", "status": "rejected", "error": {"code": "bad_args"}}
+      ]
+    },
+    {
+      "send": {"v": 2, "type": "cmd", "id": "fx7-4", "op": "ping", "args": {}},
+      "expect": [
+        {"type": "result", "id": "fx7-4", "status": "rejected", "error": {"code": "bad_version"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "op": "ping", "args": {}},
+      "expect": [
+        {"type": "error", "error": {"code": "bad_request"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx7-5", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx7-5"},
+        {"type": "result", "id": "fx7-5", "status": "ok", "state": {"buttons": []}}
+      ]
+    }
+  ]
+}

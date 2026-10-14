@@ -1,0 +1,24 @@
+{
+  "description": "observe sessions may read state and ping but never drive inputs",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx8", "role": "observe"},
+      "expect": [{"type": "hello", "status": "ok", "role": "observe"}]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx8-1", "op": "press", "args": {"buttons": ["a"]}},
+      "expect": [
+        {"type": "ack", "id": "fx8-1"},
+        {"type": "result", "id": "fx8-1", "status": "rejected", "error": {"code": "observe_only"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx8-2", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx8-2"},
+        {"type": "result", "id": "fx8-2", "status": "ok", "state": {"buttons": []}}
+      ]
+    }
+  ]
+}

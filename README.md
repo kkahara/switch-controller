@@ -324,6 +324,24 @@ sudo ~/switch-controller/add_procon_gadget.sh remove
 
 ---
 
+## Protocol v1 (remote clients)
+
+`procon.py --v1-listen 0.0.0.0:47800 --v1-token-file ~/.config/procon/v1-token`
+also serves the controller-level JSON-lines protocol in [PROTOCOL.md](PROTOCOL.md)
+(command IDs, ack on receipt, results that say whether the input reached a 0x30
+report, duplicate detection, neutral on disconnect). It runs alongside the Unix
+socket; all command sources share one lock. `procon.service` enables it, and
+`./deploy.sh` creates the token on first run.
+
+```bash
+python3 -m unittest discover -s tests          # no Switch or hidg0 needed
+./deploy.sh --install-service                   # needs passwordless sudo on the Pi
+python3 procon_send.py --v1 127.0.0.1 ping      # on the Pi
+python3 procon_send.py --v1 127.0.0.1 tap a 80
+```
+
+---
+
 ## Splatoon 3 replay code → recorded video
 
 From the Mac (this repo is under git; `./deploy.sh` rsyncs it to the Pi and

@@ -1,0 +1,26 @@
+{
+  "description": "tap is acked before execution and reports the 0x30 reports carrying press and release",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx3"},
+      "expect": [{"type": "hello", "status": "ok"}]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx3-1", "seq": 1, "op": "tap", "args": {"button": "a", "hold_ms": 50}},
+      "expect": [
+        {"type": "ack", "id": "fx3-1", "duplicate": false, "queue_depth": 0, "pi_recv_mono_ns": "$int"},
+        {"type": "result", "id": "fx3-1", "op": "tap", "status": "ok", "applied": true, "stream": "on",
+         "first_report_seq": "$int", "last_report_seq": "$int", "held_ms": "$any",
+         "pi_recv_mono_ns": "$int", "pi_start_mono_ns": "$int", "pi_end_mono_ns": "$int"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx3-2", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx3-2"},
+        {"type": "result", "id": "fx3-2", "status": "ok", "state": {"buttons": [], "stream": "on", "report_seq": "$int"}}
+      ]
+    }
+  ]
+}

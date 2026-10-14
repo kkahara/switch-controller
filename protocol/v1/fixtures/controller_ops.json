@@ -1,0 +1,61 @@
+{
+  "description": "press, release, dpad, stick, state, neutral",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx4"},
+      "expect": [{"type": "hello", "status": "ok"}]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx4-1", "op": "press", "args": {"buttons": ["b", "zl"]}},
+      "expect": [
+        {"type": "ack", "id": "fx4-1"},
+        {"type": "result", "id": "fx4-1", "status": "ok", "applied": true, "first_report_seq": "$int"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx4-2", "op": "dpad", "args": {"dir": "left"}},
+      "expect": [
+        {"type": "ack", "id": "fx4-2"},
+        {"type": "result", "id": "fx4-2", "status": "ok"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx4-3", "op": "stick", "args": {"side": "l", "x": 0.0, "y": 1.0}},
+      "expect": [
+        {"type": "ack", "id": "fx4-3"},
+        {"type": "result", "id": "fx4-3", "status": "ok"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx4-4", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx4-4"},
+        {"type": "result", "id": "fx4-4", "status": "ok",
+         "state": {"buttons": ["b", "left", "zl"], "sticks_raw": {"l": [2048, 4095]}, "stream": "on"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx4-5", "op": "release", "args": {"buttons": ["b"]}},
+      "expect": [
+        {"type": "ack", "id": "fx4-5"},
+        {"type": "result", "id": "fx4-5", "status": "ok"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx4-6", "op": "neutral", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx4-6"},
+        {"type": "result", "id": "fx4-6", "status": "ok", "applied": true}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx4-7", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx4-7"},
+        {"type": "result", "id": "fx4-7", "status": "ok",
+         "state": {"buttons": [], "sticks_raw": {"l": [2048, 2048], "r": [2048, 2048]}}}
+      ]
+    }
+  ]
+}

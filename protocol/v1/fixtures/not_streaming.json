@@ -1,0 +1,31 @@
+{
+  "description": "while the Switch is not polling, input ops are not applied and never report ok",
+  "setup": {"stream": false},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx5"},
+      "expect": [{"type": "hello", "status": "ok"}]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx5-1", "op": "tap", "args": {"button": "a"}},
+      "expect": [
+        {"type": "ack", "id": "fx5-1"},
+        {"type": "result", "id": "fx5-1", "status": "not_streaming", "applied": false, "stream": "off"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx5-2", "op": "neutral", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx5-2"},
+        {"type": "result", "id": "fx5-2", "status": "not_streaming", "applied": true, "stream": "off"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx5-3", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx5-3"},
+        {"type": "result", "id": "fx5-3", "status": "ok", "state": {"buttons": [], "stream": "off"}}
+      ]
+    }
+  ]
+}

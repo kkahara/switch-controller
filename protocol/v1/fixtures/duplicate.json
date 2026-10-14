@@ -1,0 +1,24 @@
+{
+  "description": "a repeated id is not executed again; the stored ack and result come back marked duplicate",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx6"},
+      "expect": [{"type": "hello", "status": "ok"}]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx6-1", "op": "tap", "args": {"button": "x", "hold_ms": 30}},
+      "expect": [
+        {"type": "ack", "id": "fx6-1", "duplicate": false},
+        {"type": "result", "id": "fx6-1", "status": "ok", "first_report_seq": "$int"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx6-1", "op": "tap", "args": {"button": "x", "hold_ms": 30}},
+      "expect": [
+        {"type": "ack", "id": "fx6-1", "duplicate": true, "dup_recv_mono_ns": "$int"},
+        {"type": "result", "id": "fx6-1", "status": "ok", "duplicate": true, "first_report_seq": "$int"}
+      ]
+    }
+  ]
+}

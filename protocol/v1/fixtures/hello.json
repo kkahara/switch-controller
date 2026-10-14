@@ -1,0 +1,22 @@
+{
+  "description": "control hello succeeds, then ping",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx1", "role": "control"},
+      "expect": [
+        {"v": 1, "type": "hello", "status": "ok", "server": "procon/1", "session_id": "fx1", "role": "control",
+         "daemon_start_mono_ns": "$int", "pi_mono_ns": "$int",
+         "limits": {"hold_ms": [30, 2000], "id_cache": 256}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx1-1", "seq": 1, "op": "ping", "args": {}, "mac_sent_mono_ns": 111},
+      "expect": [
+        {"v": 1, "type": "ack", "id": "fx1-1", "op": "ping", "seq": 1, "duplicate": false, "pi_recv_mono_ns": "$int", "mac_sent_mono_ns": 111},
+        {"v": 1, "type": "result", "id": "fx1-1", "op": "ping", "status": "ok", "stream": "on",
+         "pi_recv_mono_ns": "$int", "pi_start_mono_ns": "$int", "pi_end_mono_ns": "$int"}
+      ]
+    }
+  ]
+}

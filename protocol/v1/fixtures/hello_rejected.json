@@ -1,0 +1,13 @@
+{
+  "description": "wrong token is rejected and the connection closes",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "wrong-token-0000000000", "client": "fixture", "session_id": "fx2"},
+      "expect": [
+        {"v": 1, "type": "hello", "status": "rejected", "error": {"code": "unauthorized"}}
+      ],
+      "then_closed": true
+    }
+  ]
+}

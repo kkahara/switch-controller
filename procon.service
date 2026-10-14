@@ -13,7 +13,8 @@ WorkingDirectory=/home/s3-coaching/switch-controller
 # /run is tmpfs; leftover sock from a crash would block bind.
 ExecStartPre=/home/s3-coaching/switch-controller/add_procon_gadget.sh
 ExecStartPre=-/bin/rm -f /run/procon.sock
-ExecStart=/usr/bin/python3 /home/s3-coaching/switch-controller/procon.py --quiet --socket /run/procon.sock
+# --quiet hides per-report traces; USB 80 04/80 05 and protocol v1 events are always logged.
+ExecStart=/usr/bin/python3 -u /home/s3-coaching/switch-controller/procon.py --quiet --socket /run/procon.sock --v1-listen 0.0.0.0:47800 --v1-token-file /home/s3-coaching/.config/procon/v1-token
 ExecStopPost=/home/s3-coaching/switch-controller/add_procon_gadget.sh remove
 ExecStopPost=-/bin/rm -f /run/procon.sock
 Restart=on-failure

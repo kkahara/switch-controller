@@ -294,26 +294,38 @@ class ProController:
         self.player_lights = 0x00
         self.spi = build_spi_flash()
 
+        # Serializes every command source (stdin, Unix socket, protocol v1).
+        self.command_lock = threading.RLock()
+        self.started_mono_ns = time.monotonic_ns()
+        # state_gen bumps on every input change; report_seq counts successful
+        # 0x30 writes and reported_gen is the newest state_gen they carried.
+        self.state_gen = 0
+        self.report_seq = 0
+        self.reported_gen = 0
+        self._report_cond = threading.Condition()
+
     def log(self, *args) -> None:
         if self.verbose:
             print(*args, flush=True)
 
+    def log_always(self, *args) -> None:
+        print(*args, flush=True)
+
     # --- public input API -------------------------------------------------
 
     def press(self, *names: str) -> None:
+        keys = [BUTTONS[normalize_button(name)] for name in names]
         with self._lock:
-            for name in names:
-                idx, bit = BUTTONS[normalize_button(name)]
+            for idx, bit in keys:
                 self.buttons[idx] |= bit
+            self.state_gen += 1
 
     def release(self, *names: str) -> None:
+        keys = [BUTTONS[normalize_button(name)] for name in names]
         with self._lock:
-            for name in names:
-                idx, bit = BUTTONS[normalize_button(name)]
-                if name.lower() in ("charging",) and bit == 0x80 and idx == 1:
-                    self.buttons[idx] &= ~bit
-                    continue
+            for idx, bit in keys:
                 self.buttons[idx] &= ~bit
+            self.state_gen += 1
 
     def release_all(self, keep_charging_grip: bool = True) -> None:
         with self._lock:
@@ -321,6 +333,52 @@ class ProController:
             self.buttons[0] = 0
             self.buttons[1] = grip
             self.buttons[2] = 0
+            self.state_gen += 1
+
+    def neutral(self) -> None:
+        """Release every button and center both sticks."""
+        with self._lock:
+            grip = self.buttons[1] & 0x80
+            self.buttons[0] = 0
+            self.buttons[1] = grip
+            self.buttons[2] = 0
+            self.lx = self.ly = self.rx = self.ry = STICK_CENTER
+            self.state_gen += 1
+
+    def current_gen(self) -> int:
+        with self._lock:
+            return self.state_gen
+
+    def is_streaming(self) -> bool:
+        return self._stream.is_set()
+
+    def wait_reported(self, gen: int, timeout: float) -> Optional[int]:
+        """report_seq of the first 0x30 write carrying state_gen >= gen, or None."""
+        with self._report_cond:
+            if self._report_cond.wait_for(lambda: self.reported_gen >= gen, timeout):
+                return self.report_seq
+            return None
+
+    def state_dict(self) -> Dict[str, object]:
+        with self._lock:
+            pressed = [
+                name
+                for name, (idx, bit) in BUTTONS.items()
+                if name != "charging" and self.buttons[idx] & bit
+            ]
+            sticks = (self.lx, self.ly, self.rx, self.ry)
+            imu = self.imu_enabled
+            lights = self.player_lights
+        with self._report_cond:
+            seq = self.report_seq
+        return {
+            "buttons": sorted(pressed),
+            "sticks_raw": {"l": [sticks[0], sticks[1]], "r": [sticks[2], sticks[3]]},
+            "stream": "on" if self.is_streaming() else "off",
+            "imu": imu,
+            "player_lights": lights,
+            "report_seq": seq,
+        }
 
     def tap(self, name: str, hold_s: float = 0.12) -> None:
         self.press(name)
@@ -328,15 +386,19 @@ class ProController:
         self.release(name)
 
     def set_dpad(self, direction: Optional[str]) -> None:
+        target = None
+        if direction:
+            key = normalize_button(direction)
+            if key not in DPAD:
+                raise KeyError("not a d-pad direction: %r" % direction)
+            target = BUTTONS[key]
         with self._lock:
             for name in DPAD:
                 _, bit = BUTTONS[name]
                 self.buttons[2] &= ~bit
-            if direction:
-                idx, bit = BUTTONS[normalize_button(direction)]
-                if idx != 2:
-                    raise KeyError("not a d-pad direction: %r" % direction)
-                self.buttons[2] |= bit
+            if target:
+                self.buttons[target[0]] |= target[1]
+            self.state_gen += 1
 
     def set_stick(self, which: str, x: int, y: int) -> None:
         x = max(0, min(STICK_MAX, int(x)))
@@ -348,6 +410,7 @@ class ProController:
                 self.rx, self.ry = x, y
             else:
                 raise KeyError("stick must be left or right, got %r" % which)
+            self.state_gen += 1
 
     def center_sticks(self) -> None:
         self.set_stick("left", STICK_CENTER, STICK_CENTER)
@@ -475,14 +538,14 @@ class ProController:
             self._write(self.pack_0x81(0x03), trace=True)
             self.log("USB 80 03 baud → 81 03")
         elif cmd == 0x04:
-            self.log("USB 80 04 force USB HID — starting 0x30 stream")
+            self.log_always("USB 80 04 force USB HID — starting 0x30 stream")
             self._stream_report_logged = False
             self._stream.set()
         elif cmd == 0x05:
             # nscon stops reports here. A new 80 04 starts a fresh stream.
             self._stream.clear()
             self._stream_report_logged = False
-            self.log("USB 80 05 allow BT timeout — stopped 0x30 stream")
+            self.log_always("USB 80 05 allow BT timeout — stopped 0x30 stream")
         else:
             self.log("USB 80 %02x unhandled: %s" % (cmd, data[:16].hex()))
 
@@ -649,12 +712,15 @@ class ProController:
                 time.sleep(0.05)
         if self._fd is None:
             raise last_err if last_err else OSError("cannot open %s" % self.device)
+        self._start_threads()
+        self.log("listening on %s (UNTESTED ON A REAL SWITCH)" % self.device)
+
+    def _start_threads(self) -> None:
         reader = threading.Thread(target=self._read_loop, name="hidg-read", daemon=True)
         streamer = threading.Thread(target=self._stream_loop, name="hidg-0x30", daemon=True)
         self._threads = [reader, streamer]
         reader.start()
         streamer.start()
-        self.log("listening on %s (UNTESTED ON A REAL SWITCH)" % self.device)
 
     def stop(self) -> None:
         self._stop.set()
@@ -695,7 +761,12 @@ class ProController:
                 continue
             self._bump_timer()
             first = not self._stream_report_logged
-            self._write(self.pack_0x30(), trace=first)
+            gen = self.current_gen()
+            if self._write(self.pack_0x30(), trace=first):
+                with self._report_cond:
+                    self.report_seq += 1
+                    self.reported_gen = gen
+                    self._report_cond.notify_all()
             self._stream_report_logged = True
             time.sleep(self.stream_period)
 
@@ -801,7 +872,6 @@ class ControlServer:
         self.mode = mode
         self._sock: Optional[socket.socket] = None
         self._stop = threading.Event()
-        self._cmd_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -871,7 +941,7 @@ class ControlServer:
                     if not line:
                         continue
                     try:
-                        with self._cmd_lock:
+                        with self.pad.command_lock:
                             text = run_cli_command(self.pad, line)
                     except CommandQuit:
                         conn.sendall(_json_reply(True, "bye"))
@@ -1176,7 +1246,8 @@ def _serve_commands(pad: ProController, socket_path: Optional[str], quiet: bool)
                     )
                 continue
             try:
-                text = run_cli_command(pad, line)
+                with pad.command_lock:
+                    text = run_cli_command(pad, line)
             except CommandQuit:
                 break
             except CommandError as exc:
@@ -1223,6 +1294,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         action="store_true",
         help="pack handshake/0x30 reports without opening /dev/hidg0 and exit",
     )
+    parser.add_argument(
+        "--v1-listen",
+        metavar="HOST:PORT",
+        help="also serve protocol v1 (PROTOCOL.md) on TCP, e.g. 0.0.0.0:47800",
+    )
+    parser.add_argument(
+        "--v1-token-file",
+        metavar="PATH",
+        help="file holding the protocol v1 shared token (required with --v1-listen)",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.self_test:
@@ -1252,6 +1333,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             print(text)
         return 0
 
+    v1_token = None
+    if args.v1_listen:
+        from protocol_v1 import read_token_file
+
+        try:
+            v1_token = read_token_file(args.v1_token_file)
+        except (OSError, ValueError) as exc:
+            print("protocol v1: %s" % exc, file=sys.stderr)
+            return 1
+
     if not os.path.exists(args.device):
         print(
             "missing %s — run add_procon_gadget.sh over Wi-Fi SSH first "
@@ -1280,14 +1371,28 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         time.sleep(0.4)
         pad.tap(args.tap)
 
+    v1_server = None
+    if args.v1_listen:
+        from protocol_v1 import V1Server, parse_listen
+
+        host, port = parse_listen(args.v1_listen)
+        v1_server = V1Server(pad, host, port, v1_token)
+        try:
+            v1_server.start()
+        except OSError as exc:
+            print("cannot listen for protocol v1 on %s: %s" % (args.v1_listen, exc), file=sys.stderr)
+            pad.stop()
+            return 1
+
     sock_path = None if args.no_socket else args.socket
     try:
         _serve_commands(pad, sock_path, quiet=args.quiet)
     except OSError as exc:
         print("cannot bind control socket %s: %s" % (sock_path, exc), file=sys.stderr)
-        pad.stop()
         return 1
     finally:
+        if v1_server is not None:
+            v1_server.stop()
         pad.stop()
     return 0
 
