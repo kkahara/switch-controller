@@ -311,6 +311,27 @@ sudo ~/switch-controller/add_procon_gadget.sh remove
 
 ---
 
+## Splatoon 3 replay code → recorded video
+
+From the Mac (this repo is under git; `./deploy.sh` rsyncs it to the Pi and
+runs both self-tests):
+
+```bash
+./deploy.sh
+./capture.py list                          # HDMI capture card must show up
+./capture.py snap captures/now.jpg         # check what the Switch shows
+ssh s3-coaching@192.168.0.252 'python3 ~/switch-controller/replay.py play --dry-run RXE0-4NDK-KSEC-A05W'
+./review.sh RXE0-4NDK-KSEC-A05W            # records to captures/
+```
+
+`review.sh` expects the Lobby Terminal menu open with the cursor on its first
+item and `procon_send.py status` reporting `stream=on`. `replay.py type CODE`
+types only the code (keyboard already open). The keyboard grid and menu
+positions in `replay.py` are **unverified** until checked against a capture
+frame.
+
+---
+
 ## References
 
 - https://gist.github.com/mzyy94/60ae253a45e2759451789a117c59acf9
