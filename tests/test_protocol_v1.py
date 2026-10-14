@@ -214,6 +214,7 @@ class Duplicates(ServerCase):
         c.send_raw(cmd)
         _, first = c.wait_for(cmd["id"])
         c.close()
+        self.assertTrue(self.wait_until(lambda: self.server._control is None))
         c2 = self.connected()
         c2.send_raw(cmd)
         ack, again = c2.wait_for(cmd["id"])
