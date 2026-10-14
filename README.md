@@ -1,6 +1,19 @@
 # Pi Zero W — wired Nintendo Switch Pro Controller gadget
 
-**UNTESTED ON A REAL SWITCH.** These files were assembled from public reverse-engineering (mzyy94 gist dumps, dekuNukem protocol notes) and have **not** been plugged into a Nintendo Switch in this environment. Treat them as a starting point, not a verified product.
+**Verified baseline (2026-10-14, tag `baseline-working`):** with `procon.service`
+running these exact files, `procon_send.py tap home` and `procon_send.py tap a`
+over `/run/procon.sock` → `/dev/hidg0` were visibly received by a real Switch
+(HOME menu opened; A registered). Findings from that session:
+
+- `stream=off` meant the Switch was asleep. Waking it re-enumerated the gadget
+  and `stream=on` followed about 3 s later; no code change was needed.
+- The gadget negotiates **high-speed** (`max_speed` unset); a real Pro is full-speed.
+- The Switch re-enumerated the gadget 14+ times that day, once right after a
+  tap (`End Point Request ERROR: -108`). Unexplained; watch for it.
+- `ok` from the daemon only means the state changed. It is returned even while
+  `stream=off`, when nothing reaches the Switch.
+
+Everything below predates that test. These files were assembled from public reverse-engineering (mzyy94 gist dumps, dekuNukem protocol notes) and have **not** been plugged into a Nintendo Switch in this environment. Treat them as a starting point, not a verified product.
 
 **USB is the primary path.** Bluetooth (joycontrol) is optional and flaky on a Pi Zero W; see `bluetooth.md`. Do not delete the USB files if you try BT. Stop `procon.service` / `procon.py` while pairing over Bluetooth.
 
