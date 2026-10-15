@@ -1,6 +1,7 @@
 #!/bin/bash
-# Copy this tree to the Pi and run its tests there. Never deletes remote files
-# (joycontrol/ and the venv live only on the Pi).
+# Copy the controller runtime to the Pi and run its tests there. Never deletes
+# remote files (joycontrol/ and the venv live only on the Pi). legacy/ is not
+# part of the runtime and is not copied.
 #
 #   ./deploy.sh                    # copy + tests; the running daemon is untouched
 #   ./deploy.sh --install-service  # also install procon.service and restart it (sudo)
@@ -20,6 +21,7 @@ rsync -av \
   --exclude '*.log' \
   --exclude captures/ \
   --exclude diag/ \
+  --exclude legacy/ \
   "$ROOT/" "$PI:~/switch-controller/"
 
 # Protocol v1 token: created once, readable only by s3-coaching (root reads it too).
@@ -29,7 +31,7 @@ ssh "$PI" 'f=~/.config/procon/v1-token; if [ ! -s "$f" ]; then
   echo "created $f"
 fi'
 
-ssh "$PI" 'cd ~/switch-controller && python3 procon.py --self-test && python3 replay.py --self-test && python3 -m unittest discover -s tests'
+ssh "$PI" 'cd ~/switch-controller && python3 procon.py --self-test && python3 -m unittest discover -s tests'
 
 if [ "${1:-}" = "--install-service" ]; then
   ssh "$PI" 'sudo -n cp ~/switch-controller/procon.service /etc/systemd/system/procon.service \

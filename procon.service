@@ -3,7 +3,7 @@ Description=Nintendo Switch Pro Controller HID gadget (Pi Zero W)
 After=local-fs.target
 
 # Unbinds g_cdc, so Mac USB serial/ethernet will not appear while this runs.
-# Wi-Fi SSH stays available. Untested as a product; HID gadget is still experimental.
+# Wi-Fi SSH stays available. Verified on a real Switch since tag baseline-working.
 # stdin is EOF under systemd; commands arrive on /run/procon.sock (mode 0666).
 
 [Service]

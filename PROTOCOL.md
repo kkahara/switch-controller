@@ -6,7 +6,7 @@ any remote client (the Mac `switchcap` app). This file and
 by `protocol/v1/VERSION`, and both sides test against the fixtures.
 
 The protocol is **controller level only**: buttons, d-pad, sticks, synthetic
-IMU tilt presets, neutral, state, ping. It has no notion of games, screens,
+IMU pitch rotation, neutral, state, ping. It has no notion of games, screens,
 menus or navigation.
 
 ## Transport
@@ -140,3 +140,21 @@ new ops) bump the minor; anything else is v2 with a new `hello` version.
 1.3 withdrew the experimental `imu` (1.1) and `imu_angle` (1.2) ops, which set
 a static gravity pose without angular velocity; `rotate_pitch` replaces them.
 They had no consumer outside the diagnostic controller UI.
+
+The minor version is not sent on the wire. Clients check capability from the
+`ops` list in the hello reply and must refuse to operate (with an explicit
+error) when an op they need is missing, rather than discovering it as an
+`unknown_op` mid-run.
+
+### Consumers
+
+This repository is the only owner of the protocol. A client vendors a
+byte-identical copy of `PROTOCOL.md`, `protocol/v1/VERSION` and
+`protocol/v1/fixtures/`, records the commit it was taken from, and never edits
+it in place. To change the protocol: edit it here, bump `VERSION`, update the
+server and fixtures, commit, then re-vendor into each client and update the
+client's pin and tests.
+
+The Mac client (`switch-capture-automation`) keeps its copy in
+`vendor/procon-protocol/v1/` and refreshes it with
+`scripts/vendor-procon-protocol.sh`.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # HID-only Nintendo Switch Pro Controller USB gadget for Raspberry Pi Zero W.
 #
-# UNTESTED ON A REAL SWITCH. Identity + 203-byte report descriptor copied from
+# Verified on a real Switch since tag baseline-working. Identity + 203-byte report descriptor copied from
 # mzyy94's public dump / gist (VID/PID 0x057E/0x2009):
 #   https://gist.github.com/mzyy94/60ae253a45e2759451789a117c59acf9
 #
@@ -126,7 +126,6 @@ PY
     if [ -e /dev/hidg0 ]; then
       echo "Pro Controller HID gadget bound on $UDC"
       echo "/dev/hidg0 is ready. Start procon.py, then plug the Pi USB port into the Switch."
-      echo "UNTESTED ON A REAL SWITCH."
       return
     fi
     sleep 0.2

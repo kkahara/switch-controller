@@ -1,0 +1,48 @@
+{
+  "description": "rotate_pitch reports the motion and leaves the orientation in place; neutral resets it",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx9"},
+      "expect": [{"type": "hello", "status": "ok"}]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx9-1", "op": "rotate_pitch", "args": {"delta_deg": 15, "duration_ms": 50}},
+      "expect": [
+        {"type": "ack", "id": "fx9-1"},
+        {"type": "result", "id": "fx9-1", "op": "rotate_pitch", "status": "ok", "applied": true,
+         "first_report_seq": "$int", "last_report_seq": "$int",
+         "motion": {"start_pitch_deg": 0.0, "delta_deg": 15.0, "duration_ms": 50, "gyro_rate_dps": 300.0,
+                    "gyro_raw": "$int", "end_pitch_deg": 15.0, "accel": [1060, 0, 3956]}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx9-2", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx9-2"},
+        {"type": "result", "id": "fx9-2", "status": "ok", "state": {"imu_pitch_deg": 15.0, "imu_pitch_rate_dps": 0.0}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx9-3", "op": "rotate_pitch", "args": {"delta_deg": 91, "duration_ms": 500}},
+      "expect": [
+        {"type": "ack", "id": "fx9-3"},
+        {"type": "result", "id": "fx9-3", "status": "rejected", "error": {"code": "bad_args"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx9-4", "op": "neutral", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx9-4"},
+        {"type": "result", "id": "fx9-4", "status": "ok"}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx9-5", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx9-5"},
+        {"type": "result", "id": "fx9-5", "status": "ok", "state": {"imu_pitch_deg": 0.0, "imu_pitch_rate_dps": 0.0}}
+      ]
+    }
+  ]
+}

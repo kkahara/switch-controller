@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """USB HID Nintendo Switch Pro Controller emulator for a Pi Zero W gadget.
 
-UNTESTED ON A REAL SWITCH.
+Verified on a real Switch since the `baseline-working` tag (2026-10-14).
 
 Talks Nintendo's vendor protocol on /dev/hidg0 (64-byte reports), not a generic
 HID gamepad. Handshake, subcommand stubs, SPI cal blobs, and the 203-byte
@@ -782,7 +782,7 @@ class ProController:
         if self._fd is None:
             raise last_err if last_err else OSError("cannot open %s" % self.device)
         self._start_threads()
-        self.log("listening on %s (UNTESTED ON A REAL SWITCH)" % self.device)
+        self.log("listening on %s" % self.device)
 
     def _start_threads(self) -> None:
         reader = threading.Thread(target=self._read_loop, name="hidg-read", daemon=True)
@@ -852,8 +852,7 @@ HELP_TEXT = (
     "  neutral               # release all, center sticks, zero IMU orientation\n"
     "  status\n"
     "  help\n"
-    "  quit                  # stdin: stop daemon; socket: close this client\n"
-    "UNTESTED ON A REAL SWITCH."
+    "  quit                  # stdin: stop daemon; socket: close this client"
 )
 
 
@@ -1210,7 +1209,7 @@ def _self_test() -> int:
             snap = client.status()
             assert "buttons=" in snap
             help_text = client.help()
-            assert "tap" in help_text and "UNTESTED" in help_text
+            assert "tap" in help_text and "neutral" in help_text
             try:
                 client.command("no-such-cmd")
                 raise AssertionError("unknown command should fail")
@@ -1229,7 +1228,7 @@ def _self_test() -> int:
             os.rmdir(tmp)
         except OSError:
             pass
-    print("self-test ok (still UNTESTED ON A REAL SWITCH)")
+    print("self-test ok")
     return 0
 
 
@@ -1269,13 +1268,13 @@ def _serve_commands(pad: ProController, socket_path: Optional[str], quiet: bool)
 
     if use_stdin and not quiet:
         print(
-            "stdin commands (help / quit). socket %s. UNTESTED ON A REAL SWITCH."
+            "stdin commands (help / quit). socket %s."
             % (socket_path or "(disabled)"),
             flush=True,
         )
     elif not quiet:
         print(
-            "daemon mode: commands on %s (stdin EOF / not a TTY). UNTESTED ON A REAL SWITCH."
+            "daemon mode: commands on %s (stdin EOF / not a TTY)."
             % (socket_path or "(no socket)"),
             flush=True,
         )
@@ -1307,7 +1306,7 @@ def _serve_commands(pad: ProController, socket_path: Optional[str], quiet: bool)
                 use_stdin = False
                 if not quiet:
                     print(
-                        "stdin EOF; driving %s until SIGTERM. UNTESTED ON A REAL SWITCH."
+                        "stdin EOF; driving %s until SIGTERM."
                         % (socket_path or "(no socket)"),
                         flush=True,
                     )
@@ -1331,8 +1330,7 @@ def _serve_commands(pad: ProController, socket_path: Optional[str], quiet: bool)
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Emulate a wired Switch Pro Controller on /dev/hidg0. "
-        "UNTESTED ON A REAL SWITCH."
+        description="Emulate a wired Switch Pro Controller on /dev/hidg0."
     )
     parser.add_argument("--device", default=HIDG_DEFAULT)
     parser.add_argument("--hz", type=float, default=1.0 / USB_INTERVAL_S)
@@ -1413,7 +1411,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if not os.path.exists(args.device):
         print(
             "missing %s — run add_procon_gadget.sh over Wi-Fi SSH first "
-            "(unbind g_cdc, bind HID). UNTESTED ON A REAL SWITCH." % args.device,
+            "(unbind g_cdc, bind HID)." % args.device,
             file=sys.stderr,
         )
         return 1
