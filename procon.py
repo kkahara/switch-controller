@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import select
 import signal
@@ -285,6 +286,28 @@ def synthetic_tilt_imu(preset: str) -> bytes:
     return pack_imu_sample(ax, ay, az, gx, gy, gz) * 3
 
 
+ANGLE_DEGREES = tuple(range(15, 91, 15))
+GYRO_Y_PER_DEGREE = 8
+
+
+def synthetic_angle_imu(axis: str, angle: int) -> bytes:
+    """Encode a persistent pitch or yaw angle as synthetic IMU samples."""
+    if axis not in ("pitch", "yaw"):
+        raise KeyError("IMU angle axis must be pitch or yaw")
+    if angle not in range(-90, 91, 15):
+        raise KeyError("IMU angle must be a multiple of 15 in -90..90")
+    radians = math.radians(angle)
+    if axis == "pitch":
+        ax = round(math.sin(radians) * ACCEL_1G)
+        az = round(math.cos(radians) * ACCEL_1G)
+        gy = 0
+    else:
+        ax = 0
+        az = ACCEL_1G
+        gy = angle * GYRO_Y_PER_DEGREE
+    return pack_imu_sample(ax, 0, az, 0, gy, 0) * 3
+
+
 class ProController:
     """Nintendo 0x80/0x81 handshake then 0x30 input stream on a hidg device."""
 
@@ -322,6 +345,8 @@ class ProController:
         self.imu_enabled = False
         self.gravity_axis = "z"
         self.imu_preset = "neutral"
+        self.imu_axis = "pitch"
+        self.imu_angle = 0
         self.player_lights = 0x00
         self.spi = build_spi_flash()
 
@@ -375,6 +400,7 @@ class ProController:
             self.buttons[2] = 0
             self.lx = self.ly = self.rx = self.ry = STICK_CENTER
             self.imu_preset = "neutral"
+            self.imu_angle = 0
             self.state_gen += 1
 
     def current_gen(self) -> int:
@@ -401,6 +427,8 @@ class ProController:
             sticks = (self.lx, self.ly, self.rx, self.ry)
             imu = self.imu_enabled
             imu_preset = self.imu_preset
+            imu_axis = self.imu_axis
+            imu_angle = self.imu_angle
             lights = self.player_lights
         with self._report_cond:
             seq = self.report_seq
@@ -410,6 +438,8 @@ class ProController:
             "stream": "on" if self.is_streaming() else "off",
             "imu": imu,
             "imu_preset": imu_preset,
+            "imu_axis": imu_axis,
+            "imu_angle": imu_angle,
             "player_lights": lights,
             "report_seq": seq,
         }
@@ -459,6 +489,15 @@ class ProController:
         synthetic_tilt_imu(preset)  # validate
         with self._lock:
             self.imu_preset = preset
+            self.imu_angle = 0
+            self.state_gen += 1
+
+    def set_imu_angle(self, axis: str, angle: int) -> None:
+        synthetic_angle_imu(axis, angle)  # validate
+        with self._lock:
+            self.imu_axis = axis
+            self.imu_angle = angle
+            self.imu_preset = "neutral" if angle == 0 else ""
             self.state_gen += 1
 
     def snapshot(self) -> str:
@@ -502,8 +541,10 @@ class ProController:
             imu_on = self.imu_enabled
             axis = self.gravity_axis
             preset = self.imu_preset
+            imu_axis = self.imu_axis
+            imu_angle = self.imu_angle
         if imu_on:
-            rpt[13:49] = (
+            rpt[13:49] = synthetic_angle_imu(imu_axis, imu_angle) if imu_angle else (
                 synthetic_tilt_imu(preset)
                 if preset != "neutral"
                 else synthetic_gravity_imu(axis)

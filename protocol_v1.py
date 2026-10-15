@@ -20,7 +20,14 @@ import time
 import uuid
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
-from procon import BUTTONS, DPAD, IMU_TILT_PRESETS, STICK_CENTER, STICK_MAX
+from procon import (
+    BUTTONS,
+    DPAD,
+    IMU_TILT_PRESETS,
+    STICK_CENTER,
+    STICK_MAX,
+    ANGLE_DEGREES,
+)
 
 PROTOCOL_VERSION = 1
 DEFAULT_PORT = 47800
@@ -30,7 +37,10 @@ SERVER_NAME = "procon/1"
 V1_BUTTONS: Tuple[str, ...] = tuple(
     sorted(b for b in BUTTONS if b not in ("charging", "r-sr", "r-sl", "l-sr", "l-sl"))
 )
-OPS = ("press", "release", "tap", "dpad", "stick", "imu", "neutral", "state", "ping")
+OPS = (
+    "press", "release", "tap", "dpad", "stick", "imu", "imu_angle",
+    "neutral", "state", "ping",
+)
 OBSERVE_OPS = ("state", "ping")
 HOLD_MS_MIN = 30
 HOLD_MS_MAX = 2000
@@ -130,6 +140,18 @@ def validate(op: Any, args: Any) -> Json:
                 "preset must be one of %s" % ", ".join(IMU_TILT_PRESETS),
             )
         return {"preset": str(preset)}
+    if op == "imu_angle":
+        axis = args.get("axis")
+        angle = args.get("angle")
+        if axis not in ("pitch", "yaw"):
+            raise ProtocolError("bad_args", "axis must be pitch or yaw")
+        if isinstance(angle, bool) or not isinstance(angle, int):
+            raise ProtocolError("bad_args", "angle must be an integer")
+        if angle not in range(-90, 91, 15):
+            raise ProtocolError("bad_args", "angle must be a multiple of 15 in -90..90")
+        if angle and abs(angle) not in ANGLE_DEGREES:
+            raise ProtocolError("bad_args", "angle must be a multiple of 15 in -90..90")
+        return {"axis": str(axis), "angle": angle}
     return {}
 
 
@@ -141,6 +163,8 @@ def has_active_input(pad: Any) -> bool:
         if abs(x - STICK_CENTER) > STICK_ACTIVE_RAW or abs(y - STICK_CENTER) > STICK_ACTIVE_RAW:
             return True
     if state.get("imu_preset") not in (None, "neutral"):
+        return True
+    if state.get("imu_angle", 0):
         return True
     return False
 
@@ -195,6 +219,8 @@ def execute(pad: Any, op: str, args: Json, report_wait: float = REPORT_WAIT_S) -
         pad.set_stick(args["side"], args["x"], args["y"])
     elif op == "imu":
         pad.set_imu_preset(args["preset"])
+    elif op == "imu_angle":
+        pad.set_imu_angle(args["axis"], args["angle"])
     elif op == "neutral":
         pad.neutral()
     seq = pad.wait_reported(pad.current_gen(), report_wait) if pad.is_streaming() else None

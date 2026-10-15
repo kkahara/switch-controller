@@ -184,6 +184,29 @@ class FakeImu(ServerCase):
         result = c.read()
         self.assertEqual(result["error"]["code"], "bad_args")
 
+    def test_progressive_pitch_and_yaw_angles(self) -> None:
+        c = self.connected()
+        self.pad.imu_enabled = True
+        _, result = c.command("imu_angle", {"axis": "pitch", "angle": 90})
+        self.assertEqual(result["status"], "ok")
+        ax, ay, az, gx, gy, gz = struct.unpack_from("<6h", self.pad.reports[-1], 13)
+        self.assertEqual((ax, ay, az), (4096, 0, 0))
+        self.assertEqual((gx, gy, gz), (0, 0, 0))
+
+        _, result = c.command("imu_angle", {"axis": "yaw", "angle": -45})
+        self.assertEqual(result["status"], "ok")
+        ax, ay, az, gx, gy, gz = struct.unpack_from("<6h", self.pad.reports[-1], 13)
+        self.assertEqual((ax, ay, az), (0, 0, 4096))
+        self.assertEqual((gx, gy, gz), (0, -360, 0))
+        self.assertEqual(self.pad.state_dict()["imu_angle"], -45)
+
+    def test_angle_must_use_fifteen_degree_steps(self) -> None:
+        c = self.connected()
+        c.send_raw(c.make_cmd("imu_angle", {"axis": "pitch", "angle": 20}))
+        c.read()  # acknowledgement
+        result = c.read()
+        self.assertEqual(result["error"]["code"], "bad_args")
+
     def test_ack_precedes_execution_of_queued_command(self) -> None:
         c = self.connected()
         long_tap = c.make_cmd("tap", {"button": "b", "hold_ms": 300})
