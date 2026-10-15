@@ -256,11 +256,16 @@ def synthetic_gravity_imu(axis: str = "z", g: int = ACCEL_1G) -> bytes:
 
 
 IMU_TILT_PRESETS = {
-    "neutral": (0, 0, ACCEL_1G),
-    "look_up": (0, -2896, 2896),
-    "look_down": (0, 2896, 2896),
-    "look_left": (-2896, 0, 2896),
-    "look_right": (2896, 0, 2896),
+    # This Switch interprets accelerometer X as camera pitch.  Keep the
+    # neutral pose on Z so it remains the existing forward/slightly-up pose.
+    "neutral": (0, 0, ACCEL_1G, 0, 0, 0),
+    "look_up": (2896, 0, 2896, 0, 0, 0),
+    "look_down": (-2896, 0, 2896, 0, 0, 0),
+    # Y-axis accelerometer profiles were ignored by this game.  Use a small
+    # yaw-rate signal for horizontal motion instead of accidentally changing
+    # pitch through accelerometer X.
+    "look_left": (0, 0, ACCEL_1G, 0, -400, 0),
+    "look_right": (0, 0, ACCEL_1G, 0, 400, 0),
 }
 
 
@@ -272,12 +277,12 @@ def synthetic_tilt_imu(preset: str) -> bytes:
     rather than an unbounded continuous rotation.
     """
     try:
-        ax, ay, az = IMU_TILT_PRESETS[preset]
+        ax, ay, az, gx, gy, gz = IMU_TILT_PRESETS[preset]
     except KeyError as exc:
         raise KeyError(
             "unknown IMU tilt %r; known: %s" % (preset, ", ".join(IMU_TILT_PRESETS))
         ) from exc
-    return pack_imu_sample(ax, ay, az, 0, 0, 0) * 3
+    return pack_imu_sample(ax, ay, az, gx, gy, gz) * 3
 
 
 class ProController:

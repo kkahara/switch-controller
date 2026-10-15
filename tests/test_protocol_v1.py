@@ -170,7 +170,7 @@ class FakeImu(ServerCase):
         ax, ay, az, gx, gy, gz = struct.unpack_from(
             "<6h", self.pad.reports[-1], 13
         )
-        self.assertEqual((ax, ay, az), (0, 2896, 2896))
+        self.assertEqual((ax, ay, az), (-2896, 0, 2896))
         self.assertEqual((gx, gy, gz), (0, 0, 0))
 
         _, result = c.command("neutral")
