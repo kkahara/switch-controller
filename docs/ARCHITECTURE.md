@@ -31,7 +31,7 @@ In scope here:
   angular velocity, gravity vector)
 - the Mac↔Pi protocol (`protocol_v1.py`, `PROTOCOL.md`, `protocol/v1/`)
 - safety: neutral on session loss and on idle while inputs are held; one
-  serializing lock for every command source
+  serializing lock for every command source (see "Failsafe" below)
 - deployment (`deploy.sh`)
 
 Out of scope, and must not be added: game screens, menus, replay codes, visual
@@ -57,6 +57,23 @@ interactive TTY (manual start only) ──────────────�
 (tags `baseline-working`, `step2-hardware-accepted`); splitting it into a
 package for appearance alone is not worth the regression risk. Split it only
 when a change needs it, with tests covering the moved code.
+
+## Failsafe
+
+The Pi's failsafe protects only against lost communication with the Mac:
+
+- idle neutral: a control session that holds a button, d-pad direction or
+  off-centre stick, has sent nothing (not even `ping`) for 2000 ms, and has
+  nothing executing or queued is neutralized (`watchdog_neutral`);
+- closing the control session always neutralizes (`session_closed_neutral`);
+- one control session at a time (`busy`); `takeover` replaces it without
+  neutralizing.
+
+It does not count a non-zero IMU orientation as held input, cannot detect a
+half-open TCP connection beyond the 2 s idle rule, and knows nothing about
+the game. It is not, and must not become, the safety mechanism of Mac-side
+automation. The Mac's UI session ownership and future SCLC ownership are
+separate; see `switch-capture-automation/docs/LIVENESS_AND_OWNERSHIP.md`.
 
 ## Levels of command success
 
