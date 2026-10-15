@@ -5,8 +5,9 @@ any remote client (the Mac `switchcap` app). This file and
 `protocol/v1/fixtures/` are the source of truth. Clients vendor a copy pinned
 by `protocol/v1/VERSION`, and both sides test against the fixtures.
 
-The protocol is **controller level only**: buttons, d-pad, sticks, neutral,
-state, ping. It has no notion of games, screens, menus or navigation.
+The protocol is **controller level only**: buttons, d-pad, sticks, synthetic
+IMU tilt presets, neutral, state, ping. It has no notion of games, screens,
+menus or navigation.
 
 ## Transport
 
@@ -63,7 +64,8 @@ authoritative for its own observations.
 | `tap` | `{"button": "a", "hold_ms": 80}`. `hold_ms` integer 30–2000 (default 80), timed on the Pi |
 | `dpad` | `{"dir": "up" \| "down" \| "left" \| "right" \| null}` (null clears) |
 | `stick` | `{"side": "l" \| "r", "x": -1..1, "y": -1..1}` (floats; 0 = center, +y = up) |
-| `neutral` | `{}`: release everything, center both sticks |
+| `imu` | `{"preset": "neutral" \| "look_up" \| "look_down" \| "look_left" \| "look_right"}`; persistent synthetic tilt pose |
+| `neutral` | `{}`: release everything, center both sticks, reset synthetic IMU tilt |
 | `state` | `{}` |
 | `ping` | `{}` |
 
@@ -100,7 +102,7 @@ For every command with a valid `id`, `v` and `type`, the server sends an
   writes. `first` is the first report carrying the change (the press for
   `tap`), `last` the first report carrying the final state (the release for
   `tap`). They prove the input actually left the Pi.
-- `state` results add `"state": {"buttons":[...],"sticks_raw":{"l":[x,y],"r":[x,y]},"stream":"on","imu":true,"player_lights":1,"report_seq":9131}`.
+- `state` results add `"state": {"buttons":[...],"sticks_raw":{"l":[x,y],"r":[x,y]},"stream":"on","imu":true,"imu_preset":"neutral","player_lights":1,"report_seq":9131}`.
 - Envelope errors with a valid `id` (bad `v`, bad `type`) get a `rejected`
   result with **no ack**. Messages without a usable `id` get
   `{"v":1,"type":"error","error":{...}}`.

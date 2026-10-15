@@ -10,6 +10,7 @@ import glob
 import json
 import os
 import socket
+import struct
 import sys
 import time
 import unittest
@@ -157,6 +158,31 @@ class TapEvidence(ServerCase):
         if first > 1:
             self.assertFalse(self.pad.pressed_in(first - 1, "a"))
         self.assertGreaterEqual(res["held_ms"], 60)
+
+
+class FakeImu(ServerCase):
+    def test_persistent_tilt_is_reported_until_neutral(self) -> None:
+        c = self.connected()
+        self.pad.imu_enabled = True
+        _, result = c.command("imu", {"preset": "look_down"})
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(self.pad.state_dict()["imu_preset"], "look_down")
+        ax, ay, az, gx, gy, gz = struct.unpack_from(
+            "<6h", self.pad.reports[-1], 13
+        )
+        self.assertEqual((ax, ay, az), (0, 2896, 2896))
+        self.assertEqual((gx, gy, gz), (0, 0, 0))
+
+        _, result = c.command("neutral")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(self.pad.state_dict()["imu_preset"], "neutral")
+
+    def test_invalid_tilt_preset_is_rejected(self) -> None:
+        c = self.connected()
+        c.send_raw(c.make_cmd("imu", {"preset": "open_review"}))
+        c.read()  # acknowledgement
+        result = c.read()
+        self.assertEqual(result["error"]["code"], "bad_args")
 
     def test_ack_precedes_execution_of_queued_command(self) -> None:
         c = self.connected()

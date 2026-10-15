@@ -255,6 +255,31 @@ def synthetic_gravity_imu(axis: str = "z", g: int = ACCEL_1G) -> bytes:
     return sample * 3
 
 
+IMU_TILT_PRESETS = {
+    "neutral": (0, 0, ACCEL_1G),
+    "look_up": (0, -2896, 2896),
+    "look_down": (0, 2896, 2896),
+    "look_left": (-2896, 0, 2896),
+    "look_right": (2896, 0, 2896),
+}
+
+
+def synthetic_tilt_imu(preset: str) -> bytes:
+    """Return three identical synthetic IMU samples for a named tilt pose.
+
+    The accelerometer vector represents gravity at roughly a 45-degree tilt.
+    Gyro values remain zero so a persistent preset represents a held pose
+    rather than an unbounded continuous rotation.
+    """
+    try:
+        ax, ay, az = IMU_TILT_PRESETS[preset]
+    except KeyError as exc:
+        raise KeyError(
+            "unknown IMU tilt %r; known: %s" % (preset, ", ".join(IMU_TILT_PRESETS))
+        ) from exc
+    return pack_imu_sample(ax, ay, az, 0, 0, 0) * 3
+
+
 class ProController:
     """Nintendo 0x80/0x81 handshake then 0x30 input stream on a hidg device."""
 
@@ -291,6 +316,7 @@ class ProController:
         self.rx, self.ry = unpack_stick(IDLE_RIGHT)
         self.imu_enabled = False
         self.gravity_axis = "z"
+        self.imu_preset = "neutral"
         self.player_lights = 0x00
         self.spi = build_spi_flash()
 
@@ -336,13 +362,14 @@ class ProController:
             self.state_gen += 1
 
     def neutral(self) -> None:
-        """Release every button and center both sticks."""
+        """Release every button, center sticks, and reset synthetic IMU tilt."""
         with self._lock:
             grip = self.buttons[1] & 0x80
             self.buttons[0] = 0
             self.buttons[1] = grip
             self.buttons[2] = 0
             self.lx = self.ly = self.rx = self.ry = STICK_CENTER
+            self.imu_preset = "neutral"
             self.state_gen += 1
 
     def current_gen(self) -> int:
@@ -368,6 +395,7 @@ class ProController:
             ]
             sticks = (self.lx, self.ly, self.rx, self.ry)
             imu = self.imu_enabled
+            imu_preset = self.imu_preset
             lights = self.player_lights
         with self._report_cond:
             seq = self.report_seq
@@ -376,6 +404,7 @@ class ProController:
             "sticks_raw": {"l": [sticks[0], sticks[1]], "r": [sticks[2], sticks[3]]},
             "stream": "on" if self.is_streaming() else "off",
             "imu": imu,
+            "imu_preset": imu_preset,
             "player_lights": lights,
             "report_seq": seq,
         }
@@ -421,6 +450,12 @@ class ProController:
         with self._lock:
             self.gravity_axis = axis
 
+    def set_imu_preset(self, preset: str) -> None:
+        synthetic_tilt_imu(preset)  # validate
+        with self._lock:
+            self.imu_preset = preset
+            self.state_gen += 1
+
     def snapshot(self) -> str:
         with self._lock:
             return (
@@ -461,8 +496,13 @@ class ProController:
         with self._lock:
             imu_on = self.imu_enabled
             axis = self.gravity_axis
+            preset = self.imu_preset
         if imu_on:
-            rpt[13:49] = synthetic_gravity_imu(axis)
+            rpt[13:49] = (
+                synthetic_tilt_imu(preset)
+                if preset != "neutral"
+                else synthetic_gravity_imu(axis)
+            )
         # else leave zeros in 13–48 (IMU disabled)
         return bytes(rpt)
 
