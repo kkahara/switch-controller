@@ -64,9 +64,8 @@ authoritative for its own observations.
 | `tap` | `{"button": "a", "hold_ms": 80}`. `hold_ms` integer 30–2000 (default 80), timed on the Pi |
 | `dpad` | `{"dir": "up" \| "down" \| "left" \| "right" \| null}` (null clears) |
 | `stick` | `{"side": "l" \| "r", "x": -1..1, "y": -1..1}` (floats; 0 = center, +y = up) |
-| `imu` | `{"preset": "neutral" \| "look_up" \| "look_down"}`; legacy persistent synthetic pitch pose |
-| `imu_angle` | `{"axis": "pitch", "angle": -90..90}`; angle is an integer multiple of 15, positive looks up and negative looks down |
-| `neutral` | `{}`: release everything, center both sticks, reset synthetic IMU tilt |
+| `rotate_pitch` | `{"delta_deg": ±0..90 (non-zero), "duration_ms": 50–2000}`. Rotates the synthetic controller's pitch at a constant rate: gyro Y carries `delta/duration` while orientation and the accelerometer gravity vector advance; afterwards gyro is 0 and the new orientation persists. Controller orientation only; says nothing about any game camera |
+| `neutral` | `{}`: release everything, center both sticks, reset the synthetic IMU to pitch 0 (gravity on +Z) with zero angular velocity |
 | `state` | `{}` |
 | `ping` | `{}` |
 
@@ -102,8 +101,11 @@ For every command with a valid `id`, `v` and `type`, the server sends an
 - `first_report_seq` / `last_report_seq`: the server counts successful 0x30
   writes. `first` is the first report carrying the change (the press for
   `tap`), `last` the first report carrying the final state (the release for
-  `tap`). They prove the input actually left the Pi.
-- `state` results add `"state": {"buttons":[...],"sticks_raw":{"l":[x,y],"r":[x,y]},"stream":"on","imu":true,"imu_preset":"neutral","imu_axis":"pitch","imu_angle":0,"player_lights":1,"report_seq":9131}`.
+  `tap`). They prove the input actually left the Pi. For `rotate_pitch`,
+  `first` is the first report carrying the motion and `last` the first report
+  carrying the settled final orientation.
+- `rotate_pitch` results add `"motion": {"start_pitch_deg":0.0,"delta_deg":15.0,"duration_ms":500,"gyro_rate_dps":30.0,"gyro_raw":429,"end_pitch_deg":15.0,"accel":[1060,0,3956]}`.
+- `state` results add `"state": {"buttons":[...],"sticks_raw":{"l":[x,y],"r":[x,y]},"stream":"on","imu":true,"imu_pitch_deg":0.0,"imu_pitch_rate_dps":0.0,"player_lights":1,"report_seq":9131}`.
 - Envelope errors with a valid `id` (bad `v`, bad `type`) get a `rejected`
   result with **no ack**. Messages without a usable `id` get
   `{"v":1,"type":"error","error":{...}}`.
@@ -126,10 +128,15 @@ For every command with a valid `id`, `v` and `type`, the server sends an
 ## Server log
 
 Each v1 event is one journal line `v1 {json}` with `pi_mono_ns`: `listening`,
-`session_open`, `command` (id, op, status, timings, report seqs), `duplicate`,
+`session_open`, `command` (id, op, status, timings, report seqs, `motion` for
+`rotate_pitch`), `duplicate`,
 `takeover`, `session_closed[_neutral]`, `watchdog_neutral`.
 
 ## Versioning
 
 `protocol/v1/VERSION` holds `1.<minor>`. Additive changes (new optional fields,
 new ops) bump the minor; anything else is v2 with a new `hello` version.
+
+1.3 withdrew the experimental `imu` (1.1) and `imu_angle` (1.2) ops, which set
+a static gravity pose without angular velocity; `rotate_pitch` replaces them.
+They had no consumer outside the diagnostic controller UI.

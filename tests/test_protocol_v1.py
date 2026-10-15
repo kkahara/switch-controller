@@ -160,53 +160,72 @@ class TapEvidence(ServerCase):
         self.assertGreaterEqual(res["held_ms"], 60)
 
 
-class FakeImu(ServerCase):
-    def test_persistent_tilt_is_reported_until_neutral(self) -> None:
-        c = self.connected()
+class PitchRotation(ServerCase):
+    def setUp(self) -> None:
+        super().setUp()
         self.pad.imu_enabled = True
-        _, result = c.command("imu", {"preset": "look_down"})
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(self.pad.state_dict()["imu_preset"], "look_down")
-        ax, ay, az, gx, gy, gz = struct.unpack_from(
-            "<6h", self.pad.reports[-1], 13
-        )
-        self.assertEqual((ax, ay, az), (-2896, 0, 2896))
-        self.assertEqual((gx, gy, gz), (0, 0, 0))
 
-        _, result = c.command("neutral")
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(self.pad.state_dict()["imu_preset"], "neutral")
+    def imu(self, seq: int) -> tuple:
+        return struct.unpack_from("<6h", self.pad.reports[seq - 1], 13)
 
-    def test_invalid_tilt_preset_is_rejected(self) -> None:
+    def test_gyro_during_motion_then_persistent_orientation(self) -> None:
         c = self.connected()
-        c.send_raw(c.make_cmd("imu", {"preset": "open_review"}))
-        c.read()  # acknowledgement
-        result = c.read()
-        self.assertEqual(result["error"]["code"], "bad_args")
+        _, res = c.command("rotate_pitch", {"delta_deg": 15, "duration_ms": 200})
+        self.assertEqual(res["status"], "ok")
+        motion = res["motion"]
+        self.assertEqual(motion["start_pitch_deg"], 0.0)
+        self.assertEqual(motion["gyro_rate_dps"], 75.0)
+        self.assertEqual(motion["end_pitch_deg"], 15.0)
+        self.assertEqual(motion["accel"], [1060, 0, 3956])
 
-    def test_progressive_pitch_angles(self) -> None:
+        first, last = res["first_report_seq"], res["last_report_seq"]
+        window = [self.imu(s) for s in range(first, last)]
+        moving = [s for s in window if s[4] != 0]
+        self.assertGreater(len(moving), 5)
+        self.assertTrue(all(s[4] == motion["gyro_raw"] for s in moving))
+        self.assertEqual(window[: len(moving)], moving, "gyro must not resume after stopping")
+        ax_values = [s[0] for s in moving]
+        self.assertEqual(ax_values, sorted(ax_values))
+        self.assertTrue(0 <= ax_values[0] < ax_values[-1] <= 1060)
+
+        self.assertEqual(self.imu(last), (1060, 0, 3956, 0, 0, 0))
+        time.sleep(0.05)
+        self.assertEqual(self.imu(len(self.pad.reports)), (1060, 0, 3956, 0, 0, 0))
+
+    def test_diagnostic_sequence_accumulates_and_returns(self) -> None:
         c = self.connected()
-        self.pad.imu_enabled = True
-        _, result = c.command("imu_angle", {"axis": "pitch", "angle": 90})
-        self.assertEqual(result["status"], "ok")
-        ax, ay, az, gx, gy, gz = struct.unpack_from("<6h", self.pad.reports[-1], 13)
-        self.assertEqual((ax, ay, az), (4096, 0, 0))
-        self.assertEqual((gx, gy, gz), (0, 0, 0))
+        c.command("neutral")
+        ends = []
+        for delta in (15, 15, 15, 15, -15, -15, -15, -15):
+            _, res = c.command("rotate_pitch", {"delta_deg": delta, "duration_ms": 50})
+            self.assertEqual(res["status"], "ok")
+            ends.append(res["motion"]["end_pitch_deg"])
+        self.assertEqual(ends, [15.0, 30.0, 45.0, 60.0, 45.0, 30.0, 15.0, 0.0])
+        self.assertEqual(self.imu(len(self.pad.reports)), (0, 0, 4096, 0, 0, 0))
 
-        _, result = c.command("imu_angle", {"axis": "pitch", "angle": -45})
-        self.assertEqual(result["status"], "ok")
-        ax, ay, az, gx, gy, gz = struct.unpack_from("<6h", self.pad.reports[-1], 13)
-        self.assertEqual((ax, ay, az), (-2896, 0, 2896))
-        self.assertEqual((gx, gy, gz), (0, 0, 0))
-        self.assertEqual(self.pad.state_dict()["imu_angle"], -45)
-
-    def test_angle_must_use_fifteen_degree_steps(self) -> None:
+    def test_neutral_resets_orientation_and_rate(self) -> None:
         c = self.connected()
-        c.send_raw(c.make_cmd("imu_angle", {"axis": "pitch", "angle": 20}))
-        c.read()  # acknowledgement
-        result = c.read()
-        self.assertEqual(result["error"]["code"], "bad_args")
+        c.command("rotate_pitch", {"delta_deg": -30, "duration_ms": 50})
+        self.assertEqual(self.pad.state_dict()["imu_pitch_deg"], -30.0)
+        _, res = c.command("neutral")
+        self.assertEqual(self.imu(res["last_report_seq"]), (0, 0, 4096, 0, 0, 0))
+        state = self.pad.state_dict()
+        self.assertEqual((state["imu_pitch_deg"], state["imu_pitch_rate_dps"]), (0.0, 0.0))
 
+    def test_rejects_unbounded_rotations(self) -> None:
+        c = self.connected()
+        for args in (
+            {"delta_deg": 0, "duration_ms": 500},
+            {"delta_deg": 91, "duration_ms": 500},
+            {"delta_deg": 15, "duration_ms": 10},
+            {"delta_deg": 15},
+        ):
+            c.send_raw(c.make_cmd("rotate_pitch", args))
+            c.read()  # acknowledgement
+            self.assertEqual(c.read()["error"]["code"], "bad_args", args)
+
+
+class QueueOrdering(ServerCase):
     def test_ack_precedes_execution_of_queued_command(self) -> None:
         c = self.connected()
         long_tap = c.make_cmd("tap", {"button": "b", "hold_ms": 300})

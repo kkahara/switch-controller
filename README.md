@@ -24,7 +24,7 @@ Target device:
 - Wi-Fi SSH on the **main LAN** (not guest)
 - USB gadget already enumerates on a Mac as **CDC Composite Gadget (`g_cdc`)** plus ACM serial
 - `getty@ttyGS0` and `ssh` enabled
-- No physical IMU — `procon.py` packs **synthetic gravity** in `0x30` reports
+- No physical IMU — `procon.py` packs a **synthetic IMU state** (pitch orientation + gyro rate) in `0x30` reports
 
 **Default boot must keep the Mac setup gadget (`g_cdc`).** Do not put the Pro HID gadget in `cmdline.txt`. The HID-only composite is a script you run over **Wi-Fi SSH** immediately before plugging the Pi into a Switch.
 
@@ -58,7 +58,7 @@ Use the Pi **USB** micro-USB port (next to mini-HDMI), a **data** cable, **no OT
 
 ## systemd daemon (preferred)
 
-`procon.py` under systemd has **stdin EOF**, so it must not sleep-forever. The unit listens on **`/run/procon.sock`** (root-owned, mode **0666** so `s3-coaching` can connect without a extra group). Commands use the same language as the interactive CLI: `tap`, `press`, `release`, `dpad`, `stick`, `center`, `gravity`, `status`, `help`.
+`procon.py` under systemd has **stdin EOF**, so it must not sleep-forever. The unit listens on **`/run/procon.sock`** (root-owned, mode **0666** so `s3-coaching` can connect without a extra group). Commands use the same language as the interactive CLI: `tap`, `press`, `release`, `dpad`, `stick`, `center`, `neutral`, `status`, `help`.
 
 Copy the unit, reload, restart (over **Wi-Fi SSH**):
 
@@ -101,7 +101,7 @@ pad.dpad("up")
 pad.dpad(None)                # clear
 pad.stick("l", 0, 1)          # same parse as stdin (float -1..1 or raw 0..4095)
 pad.center()
-pad.gravity("z")
+pad.neutral()                 # also zeroes the synthetic IMU orientation
 print(pad.status())
 ```
 
@@ -210,7 +210,8 @@ pad.set_stick("left", 2048, 4095)
 pad.set_dpad("up")
 pad.tap("X", 0.15)
 pad.release("A")
-pad.set_gravity("z")   # synthetic ~1g on accel Z, gyro zeros
+pad.start_pitch_rotation(15, 500)   # synthetic gyro: +15° pitch over 500 ms
+pad.neutral()                        # zero orientation, zero angular velocity
 ```
 
 One-shot tap that **starts** a gadget process (still needs the gadget bound, and **conflicts** with `procon.service`):
@@ -237,7 +238,7 @@ python3 ~/switch-controller/procon.py --send 'tap a'
 | Subcommands `0x02` device info, `0x10` SPI, `0x03` mode `0x30`, `0x40` IMU | dekuNukem subcommand notes + gist `simulate_procon.py` | Other subcommands are ACK stubs |
 | SPI cal blobs | gist SPI table + bypass log; factory IMU sample from dekuNukem | Sticks/gyro scale may still be wrong |
 | `0x30` buttons/sticks/IMU | dekuNukem bluetooth HID + IMU notes | D-pad is bits on byte 5, **not** a HID hat |
-| Synthetic gyro | software | Rest pose: gyro `0`, one accel axis `±4096` (~1 g). All-zero accel is free-fall |
+| Synthetic IMU | software | Persistent pitch orientation → gravity `(sin, 0, cos) × 4096`; gyro Y carries the pitch rate only while a `rotate_pitch` is in progress. Pitch 0 is gravity on +Z. Gyro sign vs. accel direction is unverified on hardware |
 | Control socket `/run/procon.sock` | this tree | Second process / `ProconClient`; stdin TTY still works; systemd EOF drives the socket |
 
 Handshake MAC uses the **public wired dump** `04:03:D6:1D:86:1F` with correct LE (`80 01`) vs BE (subcommand `0x02`) byte order. The gist’s `mac_addr[::-1]` on a hex **string** is a known footgun and is not used here.

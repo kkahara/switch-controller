@@ -12,8 +12,8 @@ descriptor live in public dumps:
   - dekuNukem USB-HID-Notes / bluetooth HID / IMU / SPI notes
     https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering
 
-No physical IMU: 0x30 reports pack synthetic gravity (zeros gyro, ~1 g on one
-accel axis). Default boot gadget on this Pi is still g_cdc; run this only after
+No physical IMU: 0x30 reports pack a synthetic IMU state (persistent pitch
+orientation as a 1 g gravity vector, plus gyro rate during a rotation). Default boot gadget on this Pi is still g_cdc; run this only after
 add_procon_gadget.sh has bound the HID-only composite.
 
 CLI:
@@ -235,66 +235,79 @@ def pack_imu_sample(ax: int, ay: int, az: int, gx: int, gy: int, gz: int) -> byt
     return struct.pack("<6h", ax, ay, az, gx, gy, gz)
 
 
-def synthetic_gravity_imu(axis: str = "z", g: int = ACCEL_1G) -> bytes:
-    """Three identical samples: gyro at rest, ~1 g on one accel axis.
+# Gyro counts per degree/second from the factory coefficient at SPI 0x6020
+# (0x343B over the 936 dps reference used by hid-nintendo).
+GYRO_COUNTS_PER_DPS = 0x343B / 936.0
+GYRO_MAX_RAW = 32767
+PITCH_ROTATION_MAX_DEG = 90.0
+PITCH_ROTATION_MS = (50, 2000)
 
-    All-zero accel is free-fall; do not send that as a rest pose.
+
+def gravity_for_pitch(pitch_deg: float) -> Tuple[int, int, int]:
+    """Accelerometer gravity vector for a controller pitched about sensor Y.
+
+    Pitch 0 is gravity on +Z. Positive pitch moves gravity toward +X, the
+    direction the Switch has been observed to read as tilting up.
     """
-    ax = ay = az = 0
-    sign = -1 if axis.startswith("-") else 1
-    name = axis.lstrip("+-").lower()
-    mag = sign * g
-    if name == "x":
-        ax = mag
-    elif name == "y":
-        ay = mag
-    elif name == "z":
-        az = mag
-    else:
-        raise KeyError("gravity axis must be x|y|z or ±x/±y/±z, got %r" % axis)
-    sample = pack_imu_sample(ax, ay, az, 0, 0, 0)
-    return sample * 3
+    radians = math.radians(pitch_deg)
+    return (
+        int(round(math.sin(radians) * ACCEL_1G)),
+        0,
+        int(round(math.cos(radians) * ACCEL_1G)),
+    )
 
 
-IMU_TILT_PRESETS = {
-    # This Switch interprets accelerometer X as camera pitch.  Keep the
-    # neutral pose on Z so it remains the existing forward/slightly-up pose.
-    "neutral": (0, 0, ACCEL_1G, 0, 0, 0),
-    "look_up": (2896, 0, 2896, 0, 0, 0),
-    "look_down": (-2896, 0, 2896, 0, 0, 0),
-}
+def gyro_raw_for_rate(rate_dps: float) -> int:
+    return max(-GYRO_MAX_RAW, min(GYRO_MAX_RAW, int(round(rate_dps * GYRO_COUNTS_PER_DPS))))
 
 
-def synthetic_tilt_imu(preset: str) -> bytes:
-    """Return three identical synthetic IMU samples for a named tilt pose.
+class SyntheticImu:
+    """Persistent controller orientation plus angular velocity.
 
-    The accelerometer vector represents gravity at roughly a 45-degree tilt.
-    Gyro values remain zero so a persistent preset represents a held pose
-    rather than an unbounded continuous rotation.
+    Orientation and angular velocity are separate: a rotation emits a
+    constant gyro pitch rate while orientation advances over its duration,
+    then the rate returns to zero and the final orientation persists.
     """
-    try:
-        ax, ay, az, gx, gy, gz = IMU_TILT_PRESETS[preset]
-    except KeyError as exc:
-        raise KeyError(
-            "unknown IMU tilt %r; known: %s" % (preset, ", ".join(IMU_TILT_PRESETS))
-        ) from exc
-    return pack_imu_sample(ax, ay, az, gx, gy, gz) * 3
 
+    def __init__(self) -> None:
+        self.pitch_deg = 0.0
+        self._motion: Optional[Tuple[int, int, float, float]] = None
 
-ANGLE_DEGREES = tuple(range(15, 91, 15))
+    def reset(self) -> None:
+        self.pitch_deg = 0.0
+        self._motion = None
 
+    def start_rotation(self, delta_deg: float, duration_ms: int, now_ns: int) -> None:
+        self.settle(now_ns)
+        self._motion = (now_ns, duration_ms * 1_000_000, self.pitch_deg, float(delta_deg))
 
-def synthetic_angle_imu(axis: str, angle: int) -> bytes:
-    """Encode a persistent pitch angle as synthetic IMU samples."""
-    if axis != "pitch":
-        raise KeyError("IMU angle axis must be pitch")
-    if angle not in range(-90, 91, 15):
-        raise KeyError("IMU angle must be a multiple of 15 in -90..90")
-    radians = math.radians(angle)
-    ax = round(math.sin(radians) * ACCEL_1G)
-    az = round(math.cos(radians) * ACCEL_1G)
-    gy = 0
-    return pack_imu_sample(ax, 0, az, 0, gy, 0) * 3
+    def settle(self, now_ns: int) -> None:
+        """Finish a rotation whose duration has elapsed."""
+        if self._motion is not None and now_ns - self._motion[0] >= self._motion[1]:
+            self.finish()
+
+    def finish(self) -> None:
+        if self._motion is not None:
+            self.pitch_deg = self._motion[2] + self._motion[3]
+            self._motion = None
+
+    def sample(self, now_ns: int) -> Tuple[float, float]:
+        """(pitch_deg, pitch_rate_dps) at now_ns."""
+        self.settle(now_ns)
+        if self._motion is None:
+            return self.pitch_deg, 0.0
+        start_ns, duration_ns, start_pitch, delta = self._motion
+        frac = (now_ns - start_ns) / duration_ns
+        return start_pitch + delta * frac, delta / (duration_ns / 1e9)
+
+    @property
+    def moving(self) -> bool:
+        return self._motion is not None
+
+    def report_bytes(self, now_ns: int) -> bytes:
+        pitch, rate = self.sample(now_ns)
+        ax, ay, az = gravity_for_pitch(pitch)
+        return pack_imu_sample(ax, ay, az, 0, gyro_raw_for_rate(rate), 0) * 3
 
 
 class ProController:
@@ -332,10 +345,7 @@ class ProController:
         self.lx, self.ly = unpack_stick(IDLE_LEFT)
         self.rx, self.ry = unpack_stick(IDLE_RIGHT)
         self.imu_enabled = False
-        self.gravity_axis = "z"
-        self.imu_preset = "neutral"
-        self.imu_axis = "pitch"
-        self.imu_angle = 0
+        self.imu = SyntheticImu()
         self.player_lights = 0x00
         self.spi = build_spi_flash()
 
@@ -381,15 +391,15 @@ class ProController:
             self.state_gen += 1
 
     def neutral(self) -> None:
-        """Release every button, center sticks, and reset synthetic IMU tilt."""
+        """Release every button, center sticks, and reset the synthetic IMU to
+        zero orientation with zero angular velocity."""
         with self._lock:
             grip = self.buttons[1] & 0x80
             self.buttons[0] = 0
             self.buttons[1] = grip
             self.buttons[2] = 0
             self.lx = self.ly = self.rx = self.ry = STICK_CENTER
-            self.imu_preset = "neutral"
-            self.imu_angle = 0
+            self.imu.reset()
             self.state_gen += 1
 
     def current_gen(self) -> int:
@@ -415,9 +425,7 @@ class ProController:
             ]
             sticks = (self.lx, self.ly, self.rx, self.ry)
             imu = self.imu_enabled
-            imu_preset = self.imu_preset
-            imu_axis = self.imu_axis
-            imu_angle = self.imu_angle
+            pitch, rate = self.imu.sample(time.monotonic_ns())
             lights = self.player_lights
         with self._report_cond:
             seq = self.report_seq
@@ -426,9 +434,8 @@ class ProController:
             "sticks_raw": {"l": [sticks[0], sticks[1]], "r": [sticks[2], sticks[3]]},
             "stream": "on" if self.is_streaming() else "off",
             "imu": imu,
-            "imu_preset": imu_preset,
-            "imu_axis": imu_axis,
-            "imu_angle": imu_angle,
+            "imu_pitch_deg": round(pitch, 3),
+            "imu_pitch_rate_dps": round(rate, 3),
             "player_lights": lights,
             "report_seq": seq,
         }
@@ -469,30 +476,26 @@ class ProController:
         self.set_stick("left", STICK_CENTER, STICK_CENTER)
         self.set_stick("right", STICK_CENTER, STICK_CENTER)
 
-    def set_gravity(self, axis: str) -> None:
-        synthetic_gravity_imu(axis)  # validate
+    def start_pitch_rotation(self, delta_deg: float, duration_ms: int) -> Tuple[float, float]:
+        """Begin a constant-rate pitch rotation; returns (start_pitch, rate_dps)."""
         with self._lock:
-            self.gravity_axis = axis
-
-    def set_imu_preset(self, preset: str) -> None:
-        synthetic_tilt_imu(preset)  # validate
-        with self._lock:
-            self.imu_preset = preset
-            self.imu_angle = 0
+            now = time.monotonic_ns()
+            start = self.imu.sample(now)[0]
+            self.imu.start_rotation(delta_deg, duration_ms, now)
             self.state_gen += 1
+        return start, delta_deg / (duration_ms / 1000.0)
 
-    def set_imu_angle(self, axis: str, angle: int) -> None:
-        synthetic_angle_imu(axis, angle)  # validate
+    def finish_pitch_rotation(self) -> float:
+        """Settle an elapsed rotation so the final orientation is reported."""
         with self._lock:
-            self.imu_axis = axis
-            self.imu_angle = angle
-            self.imu_preset = "neutral" if angle == 0 else ""
+            self.imu.finish()
             self.state_gen += 1
+            return self.imu.pitch_deg
 
     def snapshot(self) -> str:
         with self._lock:
             return (
-                "buttons=%02x %02x %02x sticks=L(%d,%d) R(%d,%d) imu=%s gravity=%s stream=%s"
+                "buttons=%02x %02x %02x sticks=L(%d,%d) R(%d,%d) imu=%s pitch=%.1f stream=%s"
                 % (
                     self.buttons[0],
                     self.buttons[1],
@@ -502,7 +505,7 @@ class ProController:
                     self.rx,
                     self.ry,
                     "on" if self.imu_enabled else "off",
-                    self.gravity_axis,
+                    self.imu.pitch_deg,
                     "on" if self._stream.is_set() else "off",
                 )
             )
@@ -527,17 +530,8 @@ class ProController:
         prefix = self._input_prefix()
         rpt[2:13] = prefix
         with self._lock:
-            imu_on = self.imu_enabled
-            axis = self.gravity_axis
-            preset = self.imu_preset
-            imu_axis = self.imu_axis
-            imu_angle = self.imu_angle
-        if imu_on:
-            rpt[13:49] = synthetic_angle_imu(imu_axis, imu_angle) if imu_angle else (
-                synthetic_tilt_imu(preset)
-                if preset != "neutral"
-                else synthetic_gravity_imu(axis)
-            )
+            if self.imu_enabled:
+                rpt[13:49] = self.imu.report_bytes(time.monotonic_ns())
         # else leave zeros in 13–48 (IMU disabled)
         return bytes(rpt)
 
@@ -855,7 +849,7 @@ HELP_TEXT = (
     "  stick l|r <x> <y>     # raw 0..4095 or float -1..1\n"
     "  center\n"
     "  hold <btn> <seconds>\n"
-    "  gravity z|+z|-z|x|y   # synthetic 1g rest pose\n"
+    "  neutral               # release all, center sticks, zero IMU orientation\n"
     "  status\n"
     "  help\n"
     "  quit                  # stdin: stop daemon; socket: close this client\n"
@@ -919,10 +913,8 @@ def run_cli_command(pad: ProController, line: str) -> str:
             pad.set_stick(which, x, y)
         elif cmd == "center":
             pad.center_sticks()
-        elif cmd == "gravity":
-            if not args:
-                raise CommandError("gravity requires an axis")
-            pad.set_gravity(args[0])
+        elif cmd == "neutral":
+            pad.neutral()
         elif cmd == "status":
             return pad.snapshot()
         else:
@@ -1131,8 +1123,8 @@ class ProconClient:
     def center(self) -> str:
         return self.command("center")
 
-    def gravity(self, axis: str) -> str:
-        return self.command("gravity " + axis)
+    def neutral(self) -> str:
+        return self.command("neutral")
 
     def status(self) -> str:
         return self.command("status")
@@ -1227,8 +1219,8 @@ def _self_test() -> int:
             # quit on the socket must not stop the pad; only this client.
             client.command("quit")
         with ProconClient(sock_path, timeout=5.0) as client:
-            client.gravity("y")
-            assert pad.gravity_axis == "y"
+            client.neutral()
+            assert pad.imu.pitch_deg == 0.0
             client.tap("b", 0.01)
             assert not (pad.buttons[0] & 0x04)
     finally:

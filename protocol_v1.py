@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Protocol v1: line-delimited JSON over TCP for a remote controller client.
 
-Controller-level operations only (press/release/tap/dpad/stick/imu/neutral/
-state/ping). The specification is PROTOCOL.md; golden exchanges live in
+Controller-level operations only (press/release/tap/dpad/stick/rotate_pitch/
+neutral/state/ping). The specification is PROTOCOL.md; golden exchanges live in
 protocol/v1/fixtures/. Every command source shares ProController.command_lock,
 so v1, the Unix socket and stdin never interleave.
 """
@@ -23,10 +23,12 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from procon import (
     BUTTONS,
     DPAD,
-    IMU_TILT_PRESETS,
+    PITCH_ROTATION_MAX_DEG,
+    PITCH_ROTATION_MS,
     STICK_CENTER,
     STICK_MAX,
-    ANGLE_DEGREES,
+    gravity_for_pitch,
+    gyro_raw_for_rate,
 )
 
 PROTOCOL_VERSION = 1
@@ -38,7 +40,7 @@ V1_BUTTONS: Tuple[str, ...] = tuple(
     sorted(b for b in BUTTONS if b not in ("charging", "r-sr", "r-sl", "l-sr", "l-sl"))
 )
 OPS = (
-    "press", "release", "tap", "dpad", "stick", "imu", "imu_angle",
+    "press", "release", "tap", "dpad", "stick", "rotate_pitch",
     "neutral", "state", "ping",
 )
 OBSERVE_OPS = ("state", "ping")
@@ -132,26 +134,22 @@ def validate(op: Any, args: Any) -> Json:
         if side not in ("l", "r"):
             raise ProtocolError("bad_args", "side must be 'l' or 'r'")
         return {"side": side, "x": axis_to_raw(args.get("x")), "y": axis_to_raw(args.get("y"))}
-    if op == "imu":
-        preset = args.get("preset")
-        if preset not in IMU_TILT_PRESETS:
+    if op == "rotate_pitch":
+        delta = args.get("delta_deg")
+        duration = args.get("duration_ms")
+        if (
+            isinstance(delta, bool)
+            or not isinstance(delta, (int, float))
+            or delta == 0
+            or abs(delta) > PITCH_ROTATION_MAX_DEG
+        ):
             raise ProtocolError(
-                "bad_args",
-                "preset must be one of %s" % ", ".join(IMU_TILT_PRESETS),
+                "bad_args", "delta_deg must be a non-zero number within ±%g" % PITCH_ROTATION_MAX_DEG
             )
-        return {"preset": str(preset)}
-    if op == "imu_angle":
-        axis = args.get("axis")
-        angle = args.get("angle")
-        if axis != "pitch":
-            raise ProtocolError("bad_args", "axis must be pitch")
-        if isinstance(angle, bool) or not isinstance(angle, int):
-            raise ProtocolError("bad_args", "angle must be an integer")
-        if angle not in range(-90, 91, 15):
-            raise ProtocolError("bad_args", "angle must be a multiple of 15 in -90..90")
-        if angle and abs(angle) not in ANGLE_DEGREES:
-            raise ProtocolError("bad_args", "angle must be a multiple of 15 in -90..90")
-        return {"axis": str(axis), "angle": angle}
+        lo, hi = PITCH_ROTATION_MS
+        if isinstance(duration, bool) or not isinstance(duration, int) or not lo <= duration <= hi:
+            raise ProtocolError("bad_args", "duration_ms must be an integer %d..%d" % (lo, hi))
+        return {"delta_deg": float(delta), "duration_ms": duration}
     return {}
 
 
@@ -162,10 +160,6 @@ def has_active_input(pad: Any) -> bool:
     for x, y in state["sticks_raw"].values():
         if abs(x - STICK_CENTER) > STICK_ACTIVE_RAW or abs(y - STICK_CENTER) > STICK_ACTIVE_RAW:
             return True
-    if state.get("imu_preset") not in (None, "neutral"):
-        return True
-    if state.get("imu_angle", 0):
-        return True
     return False
 
 
@@ -209,6 +203,31 @@ def execute(pad: Any, op: str, args: Json, report_wait: float = REPORT_WAIT_S) -
         last = pad.wait_reported(pad.current_gen(), report_wait)
         return transmitted(last, first_report_seq=first, last_report_seq=last, held_ms=held_ms)
 
+    if op == "rotate_pitch":
+        delta, duration_ms = args["delta_deg"], args["duration_ms"]
+        start_pitch, rate = pad.start_pitch_rotation(delta, duration_ms)
+        started_ns = time.monotonic_ns()
+        first = pad.wait_reported(pad.current_gen(), report_wait)
+        remaining = duration_ms / 1000.0 - (time.monotonic_ns() - started_ns) / 1e9
+        if first is not None and remaining > 0:
+            time.sleep(remaining)
+        end_pitch = pad.finish_pitch_rotation()
+        last = pad.wait_reported(pad.current_gen(), report_wait) if first is not None else None
+        return transmitted(
+            last,
+            first_report_seq=first,
+            last_report_seq=last,
+            motion={
+                "start_pitch_deg": round(start_pitch, 3),
+                "delta_deg": delta,
+                "duration_ms": duration_ms,
+                "gyro_rate_dps": round(rate, 3),
+                "gyro_raw": gyro_raw_for_rate(rate),
+                "end_pitch_deg": round(end_pitch, 3),
+                "accel": list(gravity_for_pitch(end_pitch)),
+            },
+        )
+
     if op == "press":
         pad.press(*args["buttons"])
     elif op == "release":
@@ -217,10 +236,6 @@ def execute(pad: Any, op: str, args: Json, report_wait: float = REPORT_WAIT_S) -
         pad.set_dpad(args["dir"])
     elif op == "stick":
         pad.set_stick(args["side"], args["x"], args["y"])
-    elif op == "imu":
-        pad.set_imu_preset(args["preset"])
-    elif op == "imu_angle":
-        pad.set_imu_angle(args["axis"], args["angle"])
     elif op == "neutral":
         pad.neutral()
     seq = pad.wait_reported(pad.current_gen(), report_wait) if pad.is_streaming() else None
@@ -636,6 +651,7 @@ class V1Server:
             first_report_seq=result.get("first_report_seq"),
             last_report_seq=result.get("last_report_seq"),
             stream=result.get("stream"),
+            motion=result.get("motion"),
         )
 
     def _watchdog(self) -> None:
@@ -786,4 +802,8 @@ def words_to_cmd(words: List[str]) -> Tuple[str, Json]:
         if len(rest) != 3:
             raise ValueError("stick l|r X Y   (floats -1..1)")
         return op, {"side": rest[0], "x": float(rest[1]), "y": float(rest[2])}
+    if op == "rotate_pitch":
+        if not 1 <= len(rest) <= 2:
+            raise ValueError("rotate_pitch DELTA_DEG [duration_ms]")
+        return op, {"delta_deg": float(rest[0]), "duration_ms": int(rest[1]) if len(rest) > 1 else 500}
     raise ValueError("unknown command %r" % op)
