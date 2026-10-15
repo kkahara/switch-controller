@@ -143,8 +143,8 @@ def validate(op: Any, args: Any) -> Json:
     if op == "imu_angle":
         axis = args.get("axis")
         angle = args.get("angle")
-        if axis not in ("pitch", "yaw"):
-            raise ProtocolError("bad_args", "axis must be pitch or yaw")
+        if axis != "pitch":
+            raise ProtocolError("bad_args", "axis must be pitch")
         if isinstance(angle, bool) or not isinstance(angle, int):
             raise ProtocolError("bad_args", "angle must be an integer")
         if angle not in range(-90, 91, 15):

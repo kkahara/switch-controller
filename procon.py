@@ -262,11 +262,6 @@ IMU_TILT_PRESETS = {
     "neutral": (0, 0, ACCEL_1G, 0, 0, 0),
     "look_up": (2896, 0, 2896, 0, 0, 0),
     "look_down": (-2896, 0, 2896, 0, 0, 0),
-    # Y-axis accelerometer profiles were ignored by this game.  Use a small
-    # yaw-rate signal for horizontal motion instead of accidentally changing
-    # pitch through accelerometer X.
-    "look_left": (0, 0, ACCEL_1G, 0, -400, 0),
-    "look_right": (0, 0, ACCEL_1G, 0, 400, 0),
 }
 
 
@@ -287,24 +282,18 @@ def synthetic_tilt_imu(preset: str) -> bytes:
 
 
 ANGLE_DEGREES = tuple(range(15, 91, 15))
-GYRO_Y_PER_DEGREE = 8
 
 
 def synthetic_angle_imu(axis: str, angle: int) -> bytes:
-    """Encode a persistent pitch or yaw angle as synthetic IMU samples."""
-    if axis not in ("pitch", "yaw"):
-        raise KeyError("IMU angle axis must be pitch or yaw")
+    """Encode a persistent pitch angle as synthetic IMU samples."""
+    if axis != "pitch":
+        raise KeyError("IMU angle axis must be pitch")
     if angle not in range(-90, 91, 15):
         raise KeyError("IMU angle must be a multiple of 15 in -90..90")
     radians = math.radians(angle)
-    if axis == "pitch":
-        ax = round(math.sin(radians) * ACCEL_1G)
-        az = round(math.cos(radians) * ACCEL_1G)
-        gy = 0
-    else:
-        ax = 0
-        az = ACCEL_1G
-        gy = angle * GYRO_Y_PER_DEGREE
+    ax = round(math.sin(radians) * ACCEL_1G)
+    az = round(math.cos(radians) * ACCEL_1G)
+    gy = 0
     return pack_imu_sample(ax, 0, az, 0, gy, 0) * 3
 
 

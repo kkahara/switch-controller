@@ -64,8 +64,8 @@ authoritative for its own observations.
 | `tap` | `{"button": "a", "hold_ms": 80}`. `hold_ms` integer 30–2000 (default 80), timed on the Pi |
 | `dpad` | `{"dir": "up" \| "down" \| "left" \| "right" \| null}` (null clears) |
 | `stick` | `{"side": "l" \| "r", "x": -1..1, "y": -1..1}` (floats; 0 = center, +y = up) |
-| `imu` | `{"preset": "neutral" \| "look_up" \| "look_down" \| "look_left" \| "look_right"}`; legacy persistent synthetic tilt pose |
-| `imu_angle` | `{"axis": "pitch" \| "yaw", "angle": -90..90}`; angle is an integer multiple of 15, positive pitch looks up, negative yaw looks left |
+| `imu` | `{"preset": "neutral" \| "look_up" \| "look_down"}`; legacy persistent synthetic pitch pose |
+| `imu_angle` | `{"axis": "pitch", "angle": -90..90}`; angle is an integer multiple of 15, positive looks up and negative looks down |
 | `neutral` | `{}`: release everything, center both sticks, reset synthetic IMU tilt |
 | `state` | `{}` |
 | `ping` | `{}` |
