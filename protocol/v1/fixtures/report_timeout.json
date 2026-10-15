@@ -1,0 +1,34 @@
+{
+  "description": "the Switch is polling but no 0x30 report goes out within the wait: input ops end in error/report_timeout, never ok",
+  "setup": {"stream": true, "reports": false},
+  "exchanges": [
+    {
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx11"},
+      "expect": [{"type": "hello", "status": "ok"}]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx11-1", "op": "tap", "args": {"button": "a", "hold_ms": 30}},
+      "expect": [
+        {"type": "ack", "id": "fx11-1"},
+        {"type": "result", "id": "fx11-1", "status": "error", "applied": true, "stream": "on",
+         "first_report_seq": null, "last_report_seq": null,
+         "error": {"code": "report_timeout", "message": "$str"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx11-2", "op": "neutral", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx11-2"},
+        {"type": "result", "id": "fx11-2", "status": "error", "applied": true,
+         "error": {"code": "report_timeout", "message": "$str"}}
+      ]
+    },
+    {
+      "send": {"v": 1, "type": "cmd", "id": "fx11-3", "op": "state", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx11-3"},
+        {"type": "result", "id": "fx11-3", "status": "ok", "state": {"buttons": [], "stream": "on"}}
+      ]
+    }
+  ]
+}

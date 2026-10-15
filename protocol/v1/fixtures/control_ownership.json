@@ -1,0 +1,40 @@
+{
+  "description": "one control session at a time: a second control hello is busy, takeover closes the old session, observers may still join",
+  "setup": {"stream": true},
+  "exchanges": [
+    {
+      "conn": "a",
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx10a"},
+      "expect": [{"type": "hello", "status": "ok", "session_id": "fx10a", "role": "control"}]
+    },
+    {
+      "conn": "b",
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx10b"},
+      "expect": [{"type": "hello", "status": "rejected", "error": {"code": "busy", "message": "$str"}}],
+      "then_closed": true
+    },
+    {
+      "conn": "c",
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx10c", "takeover": true},
+      "expect": [{"type": "hello", "status": "ok", "session_id": "fx10c", "role": "control"}]
+    },
+    {
+      "conn": "a",
+      "expect": [],
+      "then_closed": true
+    },
+    {
+      "conn": "d",
+      "send": {"v": 1, "type": "hello", "token": "fixture-token-0123456789", "client": "fixture", "session_id": "fx10d", "role": "observe"},
+      "expect": [{"type": "hello", "status": "ok", "session_id": "fx10d", "role": "observe"}]
+    },
+    {
+      "conn": "c",
+      "send": {"v": 1, "type": "cmd", "id": "fx10c-1", "op": "ping", "args": {}},
+      "expect": [
+        {"type": "ack", "id": "fx10c-1"},
+        {"type": "result", "id": "fx10c-1", "status": "ok"}
+      ]
+    }
+  ]
+}

@@ -29,8 +29,11 @@ class RecordingPad(ProController):
     def __init__(self) -> None:
         super().__init__(reset_udc=False, verbose=False, stream_hz=500)
         self.reports: list = []
+        self.writes_fail = False
 
     def _write(self, report: bytes, trace: bool = False) -> bool:
+        if self.writes_fail and report[0] == 0x30:
+            return False
         self.reports.append(bytes(report))
         return True
 
@@ -125,13 +128,19 @@ class FixtureConformance(unittest.TestCase):
         with open(path, encoding="utf-8") as fh:
             spec = json.load(fh)
         pad = make_pad(spec["setup"]["stream"])
+        pad.writes_fail = not spec["setup"].get("reports", True)
         server = V1Server(pad, "127.0.0.1", 0, TOKEN, log=lambda *a, **k: None)
         server.start()
-        client = V1Client(*server.address, TOKEN)
+        clients: dict = {}
         try:
-            client._sock = socket.create_connection(server.address, timeout=5.0)
             for step in spec["exchanges"]:
-                client.send_raw(step["send"])
+                name = step.get("conn", "main")
+                client = clients.get(name)
+                if client is None:
+                    client = clients[name] = V1Client(*server.address, TOKEN)
+                    client._sock = socket.create_connection(server.address, timeout=5.0)
+                if "send" in step:
+                    client.send_raw(step["send"])
                 for expected in step["expect"]:
                     got = client.read()
                     self.assertTrue(matches(expected, got), "expected %s\n     got %s" % (expected, got))
@@ -139,7 +148,8 @@ class FixtureConformance(unittest.TestCase):
                     with self.assertRaises(ConnectionError):
                         client.read()
         finally:
-            client.close()
+            for client in clients.values():
+                client.close()
             server.stop()
             pad.stop()
 
