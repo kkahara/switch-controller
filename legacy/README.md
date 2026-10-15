@@ -16,8 +16,14 @@ network-controlled virtual Pro Controller. They are kept for reference and are
 | `bluetooth.md`, `bt_tap_a.py`, `enable_bluetooth.sh`, `install_joycontrol.sh` | Bluetooth Pro Controller experiment via joycontrol | Never verified on a Switch; USB is the only supported path |
 
 Paths inside these files (for example `~/switch-controller/replay.py`) refer
-to their old location at the repository root. Copies deployed before the move
-may still exist in `~/switch-controller/` on the Pi; they are inert.
+to their old location at the repository root.
+
+On the Pi, the copies deployed before the move were archived intact on
+2026-10-15 to `~/switch-controller-legacy-archive/2026-10-15/` (with a
+`MANIFEST` of MD5s, identical to `9c150ab`), together with an old
+`switch-init.log`. The joycontrol clone and `.venv-joycontrol/` stay in
+`~/switch-controller/` because the venv contains absolute paths; they are
+inert and `deploy.sh` never touches them.
 
 Splatoon, capture, vision and automation work belongs in the Mac repository
 `switch-capture-automation`. Do not move it back here.
