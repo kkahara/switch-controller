@@ -93,3 +93,9 @@ This repository is the single owner of protocol v1. `PROTOCOL.md`,
 `protocol/v1/VERSION` and `protocol/v1/fixtures/` are authoritative; the Mac
 vendors a pinned copy and must not extend it independently. See
 [PROTOCOL.md § Versioning](../PROTOCOL.md#versioning).
+
+## Pre-SCLC cleanup (Phase 0)
+
+The inventory and report covering both repositories live in the Mac
+repository: `switch-capture-automation/PRE_SCLC_CLEANUP_INVENTORY.md` and
+`PRE_SCLC_CLEANUP_REPORT.md` (pre-Phase-0 baseline here: `9c150ab`).
