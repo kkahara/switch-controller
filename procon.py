@@ -1399,6 +1399,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         metavar="PATH",
         help="file holding the protocol v1 shared token (required with --v1-listen)",
     )
+    parser.add_argument("--v2-listen", metavar="HOST:PORT", help="enable experimental mTLS foundation")
+    parser.add_argument("--v2-allow-network", action="store_true", help="allow non-loopback v2 bind")
+    parser.add_argument("--v2-cert", metavar="PATH")
+    parser.add_argument("--v2-key", metavar="PATH")
+    parser.add_argument("--v2-ca", metavar="PATH")
+    parser.add_argument("--v2-roles", metavar="PATH")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.self_test:
@@ -1429,6 +1435,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 0
 
     v1_token = None
+    v2_config = None
+    if args.v2_listen:
+        if not all((args.v2_cert, args.v2_key, args.v2_ca, args.v2_roles)):
+            print("protocol v2: certificate, key, CA and role registry are required", file=sys.stderr)
+            return 1
+        from protocol_v2 import load_roles, parse_bind, server_context
+        try:
+            host, port = parse_bind(args.v2_listen, args.v2_allow_network)
+            v2_config = (host, port, server_context(args.v2_cert, args.v2_key, args.v2_ca),
+                         load_roles(args.v2_roles))
+        except (OSError, ValueError) as exc:
+            print("protocol v2: %s" % exc, file=sys.stderr)
+            return 1
     if args.v1_listen:
         from protocol_v1 import read_token_file
 
@@ -1483,6 +1502,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             pad.stop()
             return 1
 
+    v2_server = None
+    if v2_config:
+        from protocol_v2 import V2Server
+        v2_server = V2Server(pad, *v2_config)
+        try:
+            v2_server.start()
+        except OSError as exc:
+            print("cannot listen for protocol v2: %s" % exc, file=sys.stderr)
+            if v1_server is not None:
+                v1_server.stop()
+            pad.stop()
+            return 1
     sock_path = None if args.no_socket else args.socket
     try:
         _serve_commands(pad, sock_path, quiet=args.quiet)
@@ -1490,6 +1521,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print("cannot bind control socket %s: %s" % (sock_path, exc), file=sys.stderr)
         return 1
     finally:
+        if v2_server is not None:
+            v2_server.stop()
         if v1_server is not None:
             v1_server.stop()
         pad.stop()
