@@ -65,9 +65,10 @@ class V2Server:
     """Independent per-connection authentication; never acquires controller ownership."""
 
     def __init__(self, pad: Any, host: str, port: int, context: ssl.SSLContext,
-                 roles: dict[str, str]) -> None:
+                 roles: dict[str, str], stop_coordinator: Any = None) -> None:
         self.pad, self.host, self.port = pad, host, port
         self.context, self.roles = context, dict(roles)
+        self.stop_coordinator = stop_coordinator
         self.boot_id = uuid.uuid4().hex  # daemon instance identity, not kernel boot ID
         self._stop = threading.Event()
         self._socket: socket.socket | None = None
@@ -157,7 +158,8 @@ class V2Server:
                     "daemon_instance_id": self.boot_id, "pi_mono_ns": time.monotonic_ns(),
                     "stop_latch": "requires_human_rearm" if self.pad.ownership_gate.state.requires_human_rearm else "clear",
                     "owner": self.pad.ownership_gate.owner.value,
-                    "capabilities": ["mtls_identity_v1", "rearm_disabled_v1"],
+                    "capabilities": ["mtls_identity_v1", "rearm_disabled_v1"] +
+                        (["estop_v1"] if self.stop_coordinator is not None else []),
                     "state": self.pad.state_dict()})
                 for _ in range(MAX_REQUESTS):
                     if self._stop.is_set():
@@ -173,6 +175,16 @@ class V2Server:
                         return
                     code = "rearm_disabled" if role == "human" and operation == "rearm" else "role_forbidden"
                     if role == "stop" and operation == "estop":
+                        if self.stop_coordinator is not None:
+                            job = self.stop_coordinator.submit()
+                            self._send(conn, {"v": 2, "type": "ack", "id": request_id,
+                                              "accepted": True, "pi_recv_mono_ns": job.received_ns})
+                            if job.done.wait(1.0):
+                                outcome = job.result
+                            else:
+                                outcome = {"status": "degraded", "error": "stop_pending"}
+                            self._send(conn, dict(outcome, v=2, type="result", id=request_id))
+                            continue
                         code = "not_implemented"
                     self._send(conn, {"v": 2, "type": "result", "id": request_id,
                         "status": "rejected", "error": {"code": code}})

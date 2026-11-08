@@ -31,7 +31,7 @@ class RecordingPad(ProController):
         self.reports: list = []
         self.writes_fail = False
 
-    def _write(self, report: bytes, trace: bool = False) -> bool:
+    def _write_device(self, report: bytes, trace: bool = False) -> bool:
         if self.writes_fail and report[0] == 0x30:
             return False
         self.reports.append(bytes(report))

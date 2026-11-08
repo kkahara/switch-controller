@@ -313,6 +313,16 @@ class SyntheticImu:
         return pack_imu_sample(ax, ay, az, 0, gyro_raw_for_rate(rate), 0) * 3
 
 
+class InputReport(bytes):
+    """Immutable input bytes tagged at packing time; never retag a stale report."""
+
+    def __new__(cls, data: bytes, epoch: int, state_gen: int):
+        result = super().__new__(cls, data)
+        result.epoch = epoch
+        result.state_gen = state_gen
+        return result
+
+
 class ProController:
     """Nintendo 0x80/0x81 handshake then 0x30 input stream on a hidg device."""
 
@@ -335,7 +345,8 @@ class ProController:
         )
 
         self._fd: Optional[int] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._tx_epoch = 0
         self._write_lock = threading.Lock()
         self._stop = threading.Event()
         self._stream = threading.Event()
@@ -365,6 +376,7 @@ class ProController:
         self.report_seq = 0
         self.reported_gen = 0
         self._report_cond = threading.Condition()
+        self.neutral_write_evidence: Optional[dict] = None
 
     def log(self, *args) -> None:
         if self.verbose:
@@ -376,24 +388,21 @@ class ProController:
     # --- public input API -------------------------------------------------
 
     def press(self, *names: str) -> None:
-        self.ownership_gate.allow_mutation()
         keys = [BUTTONS[normalize_button(name)] for name in names]
-        with self._lock:
+        with self.ownership_gate.mutation(), self._lock:
             for idx, bit in keys:
                 self.buttons[idx] |= bit
             self.state_gen += 1
 
     def release(self, *names: str) -> None:
-        self.ownership_gate.allow_mutation()
         keys = [BUTTONS[normalize_button(name)] for name in names]
-        with self._lock:
+        with self.ownership_gate.mutation(), self._lock:
             for idx, bit in keys:
                 self.buttons[idx] &= ~bit
             self.state_gen += 1
 
     def release_all(self, keep_charging_grip: bool = True) -> None:
-        self.ownership_gate.allow_mutation()
-        with self._lock:
+        with self.ownership_gate.mutation(), self._lock:
             grip = self.buttons[1] & 0x80 if keep_charging_grip else 0
             self.buttons[0] = 0
             self.buttons[1] = grip
@@ -415,6 +424,40 @@ class ProController:
     def current_gen(self) -> int:
         with self._lock:
             return self.state_gen
+
+    def activate_emergency_stop(self, timeout: float = 0.1) -> dict:
+        """Fence HID writes before activation; a stuck kernel write is degraded."""
+        if not self._write_lock.acquire(timeout=timeout):
+            # No claim of an activated HID fence is made on this failure.
+            with self.ownership_gate.stop_transition() as enforce:
+                if enforce:
+                    with self._lock:
+                        self._tx_epoch += 1
+                        self.neutral()
+                        self._neutral_stop_gen = self.state_gen
+                        self.neutral_write_evidence = None
+            return {"activated": False, "internal_neutral": enforce,
+                    "error": "hid_fence_timeout"}
+        try:
+            with self.ownership_gate.stop_transition() as enforce:
+                if not enforce:
+                    return {"activated": False, "internal_neutral": False,
+                            "error": "human_owner_active"}
+                activation_ns = time.monotonic_ns()
+                with self._lock:
+                    self._tx_epoch += 1
+                    self.neutral()
+                    self._neutral_stop_gen = self.state_gen
+                    self.neutral_write_evidence = None
+                    neutral_ns = time.monotonic_ns()
+                    generation = self.ownership_gate.generation
+                return {"activated": True, "internal_neutral": True,
+                        "generation": generation, "tx_epoch": self._tx_epoch,
+                        "pi_activated_mono_ns": activation_ns,
+                        "pi_neutral_mono_ns": neutral_ns,
+                        "neutral_state_gen": self._neutral_stop_gen}
+        finally:
+            self._write_lock.release()
 
     def is_streaming(self) -> bool:
         return self._stream.is_set()
@@ -456,14 +499,13 @@ class ProController:
         self.release(name)
 
     def set_dpad(self, direction: Optional[str]) -> None:
-        self.ownership_gate.allow_mutation()
         target = None
         if direction:
             key = normalize_button(direction)
             if key not in DPAD:
                 raise KeyError("not a d-pad direction: %r" % direction)
             target = BUTTONS[key]
-        with self._lock:
+        with self.ownership_gate.mutation(), self._lock:
             for name in DPAD:
                 _, bit = BUTTONS[name]
                 self.buttons[2] &= ~bit
@@ -472,10 +514,9 @@ class ProController:
             self.state_gen += 1
 
     def set_stick(self, which: str, x: int, y: int) -> None:
-        self.ownership_gate.allow_mutation()
         x = max(0, min(STICK_MAX, int(x)))
         y = max(0, min(STICK_MAX, int(y)))
-        with self._lock:
+        with self.ownership_gate.mutation(), self._lock:
             if which.lower() in ("l", "left"):
                 self.lx, self.ly = x, y
             elif which.lower() in ("r", "right"):
@@ -490,8 +531,7 @@ class ProController:
 
     def start_pitch_rotation(self, delta_deg: float, duration_ms: int) -> Tuple[float, float]:
         """Begin a constant-rate pitch rotation; returns (start_pitch, rate_dps)."""
-        self.ownership_gate.allow_mutation()
-        with self._lock:
+        with self.ownership_gate.mutation(), self._lock:
             now = time.monotonic_ns()
             start = self.imu.sample(now)[0]
             self.imu.start_rotation(delta_deg, duration_ms, now)
@@ -500,8 +540,7 @@ class ProController:
 
     def finish_pitch_rotation(self) -> float:
         """Settle an elapsed rotation so the final orientation is reported."""
-        self.ownership_gate.allow_mutation()
-        with self._lock:
+        with self.ownership_gate.mutation(), self._lock:
             self.imu.finish()
             self.state_gen += 1
             return self.imu.pitch_deg
@@ -538,6 +577,10 @@ class ProController:
             return bytes(body)
 
     def pack_0x30(self) -> bytes:
+        with self._lock:
+            return InputReport(self._pack_0x30(), self._tx_epoch, self.state_gen)
+
+    def _pack_0x30(self) -> bytes:
         rpt = bytearray(REPORT_SIZE)
         rpt[0] = 0x30
         rpt[1] = self.timer & 0xFF
@@ -550,6 +593,10 @@ class ProController:
         return bytes(rpt)
 
     def pack_0x21(self, ack: int, subcmd: int, payload: bytes = b"") -> bytes:
+        with self._lock:
+            return InputReport(self._pack_0x21(ack, subcmd, payload), self._tx_epoch, self.state_gen)
+
+    def _pack_0x21(self, ack: int, subcmd: int, payload: bytes = b"") -> bytes:
         rpt = bytearray(REPORT_SIZE)
         rpt[0] = 0x21
         rpt[1] = self.timer & 0xFF
@@ -569,14 +616,35 @@ class ProController:
         return bytes(rpt)
 
     def _write(self, report: bytes, trace: bool = False) -> bool:
+        # Transmission admission is linearized by _write_lock. Stop takes this
+        # fence before its short gate/pad transition. USB I/O holds only this
+        # dedicated fence, never the mutation guard or pad-state lock.
+        with self._write_lock:
+            if report and report[0] in (0x30, 0x21):
+                with self._lock:
+                    if not isinstance(report, InputReport) or report.epoch != self._tx_epoch:
+                        return False
+            written = self._write_device(report, trace)
+            if written and report[0] == 0x30:
+                with self._report_cond:
+                    self.report_seq += 1
+                    self.reported_gen = report.state_gen
+                    if getattr(self, "_neutral_stop_gen", None) == report.state_gen:
+                        self.neutral_write_evidence = {
+                            "report_seq": self.report_seq, "state_gen": report.state_gen,
+                            "pi_write_mono_ns": time.monotonic_ns(), "tx_epoch": report.epoch,
+                        }
+                    self._report_cond.notify_all()
+            return written
+
+    def _write_device(self, report: bytes, trace: bool = False) -> bool:
         if self._fd is None:
             if trace:
                 self.log("TX dropped (hidg closed):", report.hex())
             return False
         buf = report if len(report) == REPORT_SIZE else (report + bytes(REPORT_SIZE - len(report)))[:REPORT_SIZE]
         try:
-            with self._write_lock:
-                written = os.write(self._fd, buf)
+            written = os.write(self._fd, buf)
             if written != REPORT_SIZE:
                 if trace:
                     self.log("TX short %d/%d: %s" % (written, REPORT_SIZE, buf.hex()))
@@ -844,12 +912,7 @@ class ProController:
                 continue
             self._bump_timer()
             first = not self._stream_report_logged
-            gen = self.current_gen()
-            if self._write(self.pack_0x30(), trace=first):
-                with self._report_cond:
-                    self.report_seq += 1
-                    self.reported_gen = gen
-                    self._report_cond.notify_all()
+            self._write(self.pack_0x30(), trace=first)
             self._stream_report_logged = True
             time.sleep(self.stream_period)
 
@@ -1011,6 +1074,7 @@ class ControlServer:
 
     def _handle_conn(self, conn: socket.socket) -> None:
         buf = b""
+        self.pad.ownership_gate.claim_human(conn)
         try:
             conn.settimeout(120.0)
             while not self._stop.is_set():
@@ -1028,6 +1092,7 @@ class ControlServer:
                     line = raw.decode("utf-8", "replace").strip()
                     if not line:
                         continue
+                    self.pad.ownership_gate.claim_human(conn)
                     try:
                         with self.pad.command_lock:
                             text = run_cli_command(self.pad, line, MutationSource.UNIX_SOCKET)
@@ -1043,6 +1108,7 @@ class ControlServer:
         except OSError:
             pass
         finally:
+            self.pad.ownership_gate.release_human(conn)
             try:
                 conn.close()
             except OSError:
@@ -1165,7 +1231,11 @@ def send_command(line: str, path: str = SOCKET_DEFAULT, timeout: float = 60.0) -
 
 def initialize_safety_state(pad: ProController, store: StopMarkerStore) -> OwnershipGate:
     """Load fail-closed state, disarm ownership, and force full neutral."""
-    gate = OwnershipGate(store.load())
+    try:
+        loaded = store.load()
+    except OSError:
+        loaded = SafetyState(0, True, "storage_unreadable_generation_unknown")
+    gate = OwnershipGate(SafetyState(loaded.generation + 1, True, "daemon_restart"))
     pad.ownership_gate = gate
     pad.neutral()
     return gate
@@ -1309,6 +1379,9 @@ def _serve_commands(pad: ProController, socket_path: Optional[str], quiet: bool)
             flush=True,
         )
 
+    stdin_identity = object()
+    if use_stdin:
+        pad.ownership_gate.claim_human(stdin_identity)
     try:
         while not stop.is_set():
             if not use_stdin:
@@ -1354,6 +1427,7 @@ def _serve_commands(pad: ProController, socket_path: Optional[str], quiet: bool)
     except KeyboardInterrupt:
         print()
     finally:
+        pad.ownership_gate.release_human(stdin_identity)
         if server is not None:
             server.stop()
 
@@ -1472,6 +1546,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         verbose=not args.quiet,
         reset_udc=not args.no_reset_udc,
     )
+    initialize_safety_state(pad, safety_store)
     try:
         pad.start()
     except OSError as exc:
@@ -1482,7 +1557,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 1
     # Startup is always neutral and has no autonomous owner. Persistent marker
     # state governs only future autonomous arming, not legacy human control.
-    initialize_safety_state(pad, safety_store)
     if args.press:
         pad.press(args.press)
     if args.tap:
@@ -1503,15 +1577,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             return 1
 
     v2_server = None
+    stop_coordinator = None
     if v2_config:
         from protocol_v2 import V2Server
-        v2_server = V2Server(pad, *v2_config)
+        from emergency_stop import StopCoordinator
+        stop_coordinator = StopCoordinator(pad, safety_store)
+        v2_server = V2Server(pad, *v2_config, stop_coordinator=stop_coordinator)
         try:
             v2_server.start()
         except OSError as exc:
             print("cannot listen for protocol v2: %s" % exc, file=sys.stderr)
             if v1_server is not None:
                 v1_server.stop()
+            stop_coordinator.close()
             pad.stop()
             return 1
     sock_path = None if args.no_socket else args.socket
@@ -1523,6 +1601,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     finally:
         if v2_server is not None:
             v2_server.stop()
+        if stop_coordinator is not None:
+            stop_coordinator.close()
         if v1_server is not None:
             v1_server.stop()
         pad.stop()

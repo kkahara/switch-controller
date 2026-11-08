@@ -608,13 +608,17 @@ class V1Server:
             threading.Thread(target=session.run, name="v1-session", daemon=True).start()
 
     def _claim_control(self, session: _Session, takeover: bool) -> bool:
-        if not self.pad.ownership_gate.allows_legacy_control():
-            return False
-        with self._lock:
+        gate = self.pad.ownership_gate
+        with gate._lock, self._lock:
+            if not gate.claim_human(session):
+                return False
             old = self._control
             if old is not None and old.alive and not takeover:
+                gate.release_human(session)
                 return False
             self._control = session
+            if old is not None:
+                gate.release_human(old)
         if old is not None and old.alive:
             self.log("takeover", old_session_id=old.session_id, new_session_id=session.session_id)
             old.close()
@@ -629,6 +633,7 @@ class V1Server:
                 self._control = None
         if session.session_id is None:
             return
+        self.pad.ownership_gate.release_human(session)
         if was_control:
             with self.pad.command_lock:
                 active = has_active_input(self.pad)

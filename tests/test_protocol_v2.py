@@ -15,6 +15,8 @@ from procon import ProController
 from protocol_v2 import (MAX_HANDSHAKES, MAX_NONSTOP, MAX_REQUESTS, V2Server,
                          load_roles, parse_bind, server_context)
 from safety import Owner, SafetyState
+from safety import StopMarkerStore
+from emergency_stop import StopCoordinator
 
 
 class ProtocolV2Tests(unittest.TestCase):
@@ -235,6 +237,81 @@ class ProtocolV2Tests(unittest.TestCase):
             path.write_text('{"bad":"human"}')
             with self.assertRaises(ValueError):
                 load_roles(str(path))
+
+    def test_authenticated_stop_reports_separate_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = StopMarkerStore(directory)
+            coordinator = StopCoordinator(self.pad, store)
+            self.server.stop_coordinator = coordinator
+            executor, executor_stream = self.connect("executor", "executor")
+            self.assertEqual(json.loads(executor_stream.readline())["role"], "executor")
+            conn, stream = self.connect("stop", "stop")
+            try:
+                hello = json.loads(stream.readline())
+                self.assertIn("estop_v1", hello["capabilities"])
+                stream.write(b'{"v":2,"type":"estop","id":"actual-stop"}\n')
+                stream.flush()
+                ack = json.loads(stream.readline())
+                self.assertEqual(ack["type"], "ack")
+                self.assertTrue(ack["accepted"])
+                self.assertNotIn("internal_neutral", ack)
+                result = json.loads(stream.readline())
+                self.assertEqual(result["status"], "degraded")  # no fake HID streamer here
+                self.assertTrue(result["activated"])
+                self.assertTrue(result["internal_neutral"])
+                self.assertTrue(result["latch_durable"])
+                self.assertFalse(result["neutral_hid_transmitted"])
+                self.assertTrue(store.load().requires_human_rearm)
+                stream.write(b'{"v":2,"type":"rearm","id":"still-disabled"}\n')
+                stream.flush()
+                self.assertEqual(json.loads(stream.readline())["error"]["code"], "role_forbidden")
+            finally:
+                stream.close(); conn.close()
+                executor_stream.close(); executor.close()
+                coordinator.close()
+
+    def test_independent_authenticated_stop_100(self) -> None:
+        import math
+        with tempfile.TemporaryDirectory() as directory:
+            # Fake authority only: exercise an active reservation without arm/rearm APIs.
+            self.pad.ownership_gate._state = SafetyState(1, False, "test_only")
+            self.pad.ownership_gate.reserve_autonomy()
+            self.pad._write_device = lambda report, trace=False: True
+            self.pad._start_threads()
+            self.pad._stream.set()
+            coordinator = StopCoordinator(self.pad, StopMarkerStore(directory))
+            self.server.stop_coordinator = coordinator
+            executors = [self.connect("executor", "executor") for _ in range(2)]
+            samples = []
+            try:
+                for _, stream in executors:
+                    self.assertEqual(json.loads(stream.readline())["role"], "executor")
+                for index in range(100):
+                    conn, stream = self.connect("stop", "stop")
+                    try:
+                        self.assertEqual(json.loads(stream.readline())["role"], "stop")
+                        request = {"v": 2, "type": "estop", "id": str(index)}
+                        stream.write((json.dumps(request) + "\n").encode()); stream.flush()
+                        self.assertEqual(json.loads(stream.readline())["type"], "ack")
+                        result = json.loads(stream.readline())
+                        self.assertEqual(result["status"], "ok", result)
+                        self.assertTrue(result["neutral_hid_transmitted"])
+                        self.assertEqual(result["neutral_hid_write"]["state_gen"], result["neutral_state_gen"])
+                        samples.append((result["pi_neutral_mono_ns"] - result["pi_recv_mono_ns"]) / 1e6)
+                    finally:
+                        stream.close(); conn.close()
+                ordered = sorted(samples)
+                summary = {"scenario": "authenticated_independent_stop", "repetitions": 100,
+                           "p99_ms": ordered[math.ceil(.99 * len(ordered)) - 1],
+                           "max_ms": max(samples), "clock": "host_monotonic_fake_pi"}
+                print("STOP_LATENCY " + json.dumps(summary))
+                self.assertLessEqual(summary["p99_ms"], 100)
+                self.assertLessEqual(summary["max_ms"], 150)
+            finally:
+                for conn, stream in executors:
+                    stream.close(); conn.close()
+                self.pad.stop()
+                coordinator.close()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,10 @@
 # S2B-1B local authentication foundation
 
+S2B-2A adds a local stop coordinator to the daemon integration; see
+[S2B-2A emergency-stop verification](SCLC_STAGE2B2A_EMERGENCY_STOP.md).
+The authentication-foundation behavior below describes instances without
+that coordinator. The listener remains opt-in and rearm remains disabled.
+
 The v2 listener is disabled unless `--v2-listen` is explicitly supplied along
 with `--v2-cert`, `--v2-key`, `--v2-ca`, and `--v2-roles`. The bind requires an
 explicit IPv4 address and port; non-loopback addresses additionally require
