@@ -30,6 +30,7 @@ from procon import (
     gravity_for_pitch,
     gyro_raw_for_rate,
 )
+from safety import MutationSource
 
 PROTOCOL_VERSION = 1
 DEFAULT_PORT = 47800
@@ -491,7 +492,7 @@ class _Session:
                         error=("expired", "queued %.1f ms > max_queue_ms %s" % (queued_ms, cmd["max_queue_ms"])),
                     )
                 else:
-                    with pad.command_lock:
+                    with pad.command_lock, pad.ownership_gate.source(MutationSource.V1):
                         start_ns = time.monotonic_ns()
                         try:
                             outcome = execute(pad, cmd["op"], cmd["args"], self.server.report_wait)
@@ -607,6 +608,8 @@ class V1Server:
             threading.Thread(target=session.run, name="v1-session", daemon=True).start()
 
     def _claim_control(self, session: _Session, takeover: bool) -> bool:
+        if not self.pad.ownership_gate.allows_legacy_control():
+            return False
         with self._lock:
             old = self._control
             if old is not None and old.alive and not takeover:

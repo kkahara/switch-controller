@@ -56,11 +56,14 @@ import threading
 import time
 from typing import Dict, Iterable, Optional, Tuple
 
+from safety import MutationSource, OwnershipDenied, OwnershipGate, SafetyState, StopMarkerStore
+
 HIDG_DEFAULT = "/dev/hidg0"
 SOCKET_DEFAULT = "/run/procon.sock"
 # Personal Pi Zero: world-writable so s3-coaching can connect without a group.
 # Prefer root:procon 0660 if you add a procon group.
 SOCKET_MODE = 0o666
+SAFETY_STATE_DIR = "/var/lib/procon"
 REPORT_SIZE = 64
 STICK_CENTER = 0x800  # 2048; 12-bit neutral
 STICK_MAX = 0xFFF
@@ -320,12 +323,16 @@ class ProController:
         verbose: bool = True,
         reset_udc: bool = True,
         gadget_path: str = "/sys/kernel/config/usb_gadget/procon",
+        ownership_gate: Optional[OwnershipGate] = None,
     ) -> None:
         self.device = device
         self.stream_period = 1.0 / stream_hz if stream_hz else USB_INTERVAL_S
         self.verbose = verbose
         self.reset_udc_on_start = reset_udc
         self.gadget_path = gadget_path
+        self.ownership_gate = ownership_gate or OwnershipGate(
+            SafetyState(0, True, "uninitialized")
+        )
 
         self._fd: Optional[int] = None
         self._lock = threading.Lock()
@@ -369,6 +376,7 @@ class ProController:
     # --- public input API -------------------------------------------------
 
     def press(self, *names: str) -> None:
+        self.ownership_gate.allow_mutation()
         keys = [BUTTONS[normalize_button(name)] for name in names]
         with self._lock:
             for idx, bit in keys:
@@ -376,6 +384,7 @@ class ProController:
             self.state_gen += 1
 
     def release(self, *names: str) -> None:
+        self.ownership_gate.allow_mutation()
         keys = [BUTTONS[normalize_button(name)] for name in names]
         with self._lock:
             for idx, bit in keys:
@@ -383,6 +392,7 @@ class ProController:
             self.state_gen += 1
 
     def release_all(self, keep_charging_grip: bool = True) -> None:
+        self.ownership_gate.allow_mutation()
         with self._lock:
             grip = self.buttons[1] & 0x80 if keep_charging_grip else 0
             self.buttons[0] = 0
@@ -393,7 +403,7 @@ class ProController:
     def neutral(self) -> None:
         """Release every button, center sticks, and reset the synthetic IMU to
         zero orientation with zero angular velocity."""
-        with self._lock:
+        with self.ownership_gate.neutralization(), self._lock:
             grip = self.buttons[1] & 0x80
             self.buttons[0] = 0
             self.buttons[1] = grip
@@ -446,6 +456,7 @@ class ProController:
         self.release(name)
 
     def set_dpad(self, direction: Optional[str]) -> None:
+        self.ownership_gate.allow_mutation()
         target = None
         if direction:
             key = normalize_button(direction)
@@ -461,6 +472,7 @@ class ProController:
             self.state_gen += 1
 
     def set_stick(self, which: str, x: int, y: int) -> None:
+        self.ownership_gate.allow_mutation()
         x = max(0, min(STICK_MAX, int(x)))
         y = max(0, min(STICK_MAX, int(y)))
         with self._lock:
@@ -478,6 +490,7 @@ class ProController:
 
     def start_pitch_rotation(self, delta_deg: float, duration_ms: int) -> Tuple[float, float]:
         """Begin a constant-rate pitch rotation; returns (start_pitch, rate_dps)."""
+        self.ownership_gate.allow_mutation()
         with self._lock:
             now = time.monotonic_ns()
             start = self.imu.sample(now)[0]
@@ -487,6 +500,7 @@ class ProController:
 
     def finish_pitch_rotation(self) -> float:
         """Settle an elapsed rotation so the final orientation is reported."""
+        self.ownership_gate.allow_mutation()
         with self._lock:
             self.imu.finish()
             self.state_gen += 1
@@ -864,7 +878,15 @@ class CommandQuit(Exception):
     """stdin CLI asked to exit the process."""
 
 
-def run_cli_command(pad: ProController, line: str) -> str:
+def run_cli_command(
+    pad: ProController, line: str, source: MutationSource = MutationSource.INTERNAL
+) -> str:
+    """Run a legacy command under the unified ownership decision."""
+    with pad.ownership_gate.source(source):
+        return _run_cli_command(pad, line)
+
+
+def _run_cli_command(pad: ProController, line: str) -> str:
     """Execute one stdin-language command. Return output text (may be empty).
 
     Raises CommandQuit for quit/exit (stdin should stop the process).
@@ -920,7 +942,7 @@ def run_cli_command(pad: ProController, line: str) -> str:
             raise CommandError("unknown command %r (help for list)" % cmd)
     except CommandError:
         raise
-    except (KeyError, ValueError, IndexError, TypeError) as exc:
+    except (KeyError, ValueError, IndexError, TypeError, OwnershipDenied) as exc:
         raise CommandError(str(exc)) from exc
     return ""
 
@@ -1008,7 +1030,7 @@ class ControlServer:
                         continue
                     try:
                         with self.pad.command_lock:
-                            text = run_cli_command(self.pad, line)
+                            text = run_cli_command(self.pad, line, MutationSource.UNIX_SOCKET)
                     except CommandQuit:
                         conn.sendall(_json_reply(True, "bye"))
                         return
@@ -1139,6 +1161,14 @@ def send_command(line: str, path: str = SOCKET_DEFAULT, timeout: float = 60.0) -
         return client.command(line)
     finally:
         client.close()
+
+
+def initialize_safety_state(pad: ProController, store: StopMarkerStore) -> OwnershipGate:
+    """Load fail-closed state, disarm ownership, and force full neutral."""
+    gate = OwnershipGate(store.load())
+    pad.ownership_gate = gate
+    pad.neutral()
+    return gate
 
 
 def _self_test() -> int:
@@ -1313,7 +1343,7 @@ def _serve_commands(pad: ProController, socket_path: Optional[str], quiet: bool)
                 continue
             try:
                 with pad.command_lock:
-                    text = run_cli_command(pad, line)
+                    text = run_cli_command(pad, line, MutationSource.STDIN)
             except CommandQuit:
                 break
             except CommandError as exc:
@@ -1416,6 +1446,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         return 1
 
+    safety_store = StopMarkerStore(SAFETY_STATE_DIR)
     pad = ProController(
         device=args.device,
         stream_hz=args.hz,
@@ -1430,6 +1461,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             file=sys.stderr,
         )
         return 1
+    # Startup is always neutral and has no autonomous owner. Persistent marker
+    # state governs only future autonomous arming, not legacy human control.
+    initialize_safety_state(pad, safety_store)
     if args.press:
         pad.press(args.press)
     if args.tap:
